@@ -74,7 +74,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kalepail/passkey-kit.git"
+    "url": "git+https://github.com/stellar/passkey-kit.git"
   },
   "keywords": [
     "smart wallet",
@@ -90,7 +90,7 @@
     "crypto"
   ],
   "bugs": {
-    "url": "https://github.com/kalepail/passkey-kit/issues"
+    "url": "https://github.com/stellar/passkey-kit/issues"
   },
-  "homepage": "https://github.com/kalepail/passkey-kit/blob/main/README.md"
+  "homepage": "https://github.com/stellar/passkey-kit/blob/main/README.md"
 }

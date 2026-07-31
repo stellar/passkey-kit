@@ -9,7 +9,7 @@ A TypeScript SDK for creating and using **smart-wallet accounts on Stellar with 
 > **Security.** Review the contract and SDK yourself before holding meaningful value, and read [Caveats](#caveats).
 
 > [!NOTE]
-> **Looking for context rules, thresholds, and spending-limit policies?** [smart-account-kit](https://github.com/kalepail/smart-account-kit) is a sibling SDK built on the audited [OpenZeppelin stellar-contracts](https://github.com/OpenZeppelin/stellar-contracts) account. It uses a different on-chain authorization model (context rules + an auth digest) than passkey-kit's flat `Signatures` map, so the two are not drop-in compatible — pick the model that fits your app.
+> **Looking for context rules, thresholds, and spending-limit policies?** [smart-account-kit](https://github.com/stellar/smart-account-kit) is a sibling SDK built on the audited [OpenZeppelin stellar-contracts](https://github.com/OpenZeppelin/stellar-contracts) account. It uses a different on-chain authorization model (context rules + an auth digest) than passkey-kit's flat `Signatures` map, so the two are not drop-in compatible — pick the model that fits your app.
 
 ## Contents
 
