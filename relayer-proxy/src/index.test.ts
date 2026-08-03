@@ -11,6 +11,7 @@ import {
   Operation,
   SorobanDataBuilder,
   TransactionBuilder,
+  hash,
   xdr,
 } from "@stellar/stellar-sdk";
 import { Server as RpcServer } from "@stellar/stellar-sdk/rpc";
@@ -301,15 +302,18 @@ function deployXdr(
     opSource?: string;
     /** Contract-id preimage deployer address. */
     preimageAddress?: string;
+    /** Envelope source, when different from the default deployer. */
+    sourceKeypair?: Keypair;
   } = {}
 ) {
-  const transaction = new TransactionBuilder(new Account(DEPLOYER, "0"), {
+  const source = opts.sourceKeypair?.publicKey() ?? DEPLOYER;
+  const transaction = new TransactionBuilder(new Account(source, "0"), {
     fee: "100",
     networkPassphrase: Networks.TESTNET,
   })
     .addOperation(
       Operation.createCustomContract({
-        address: Address.fromString(opts.preimageAddress ?? DEPLOYER),
+        address: Address.fromString(opts.preimageAddress ?? source),
         wasmHash: Buffer.from(wasmHash, "hex"),
         salt: Buffer.alloc(32, 4),
         constructorArgs: [xdr.ScVal.scvVoid()],
@@ -321,7 +325,8 @@ function deployXdr(
     )
     .setTimeout(30)
     .build();
-  const signer = opts.signer === undefined ? DEPLOYER_KEYPAIR : opts.signer;
+  const signer =
+    opts.signer === undefined ? (opts.sourceKeypair ?? DEPLOYER_KEYPAIR) : opts.signer;
   if (signer) transaction.sign(signer);
   return transaction.toXDR();
 }
@@ -825,6 +830,34 @@ describe("POST / deploy (xdr) negative validation", () => {
     await expect(res.json()).resolves.toEqual({
       success: false,
       error: "Deploy transaction lacks a valid source signature",
+    });
+    expect(apiKeyDO.get).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects a shared deployer as the envelope source even when allowlisted", async () => {
+    // The shared deployer's secret is publicly derivable, so anyone can produce
+    // this envelope. It is allowlisted as the deploy *authorizer*, never as the
+    // source — the { func, auth } route is the only shared-deployer path.
+    const shared = Keypair.fromRawEd25519Seed(hash(Buffer.from("kalepail")));
+    expect(shared.publicKey()).toBe(
+      "GC2C7AWLS2FMFTQAHW3IBUB4ZXVP4E37XNLEF2IK7IVXBB6CMEPCSXFO"
+    );
+    const apiKeyDO = makeApiKeyDO();
+    const res = await worker.fetch(
+      makeRequest("/", {
+        method: "POST",
+        body: {
+          xdr: deployXdr(5_000n, WALLET_WASM_HASH, { sourceKeypair: shared }),
+        },
+      }),
+      makeEnv({ apiKeyDO, allowedDeployers: shared.publicKey() }),
+      ctx()
+    );
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({
+      success: false,
+      error: "Shared deployer may not source signed xdr",
     });
     expect(apiKeyDO.get).not.toHaveBeenCalled();
     expect(submitTransaction).not.toHaveBeenCalled();

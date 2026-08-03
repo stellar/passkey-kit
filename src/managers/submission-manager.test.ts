@@ -44,7 +44,8 @@ function manager(
 
 function deployTransaction(
   deployer: Keypair,
-  source = NULL_ACCOUNT
+  source = NULL_ACCOUNT,
+  subInvocations: xdr.SorobanAuthorizedInvocation[] = []
 ): AssembledTransaction<PasskeyClient> {
   const salt = hash(Buffer.from("credential-id"));
   const bareOperation = Operation.createCustomContract({
@@ -60,7 +61,7 @@ function deployTransaction(
       xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
         bareInvoke.hostFunction().createContractV2()
       ),
-    subInvocations: [],
+    subInvocations,
   });
   const discovered = new xdr.SorobanAuthorizationEntry({
     credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
@@ -168,6 +169,29 @@ describe("SubmissionManager deploy authorization", () => {
       undefined
     );
     expect(sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it("refuses to sign a shared deploy auth entry carrying sub-invocations", async () => {
+    // A hostile simulation RPC returns the correct create-contract root with an
+    // extra child. The deployer signs the whole tree, so the child would be
+    // authorized under its address credentials too.
+    const child = new xdr.SorobanAuthorizedInvocation({
+      function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+        new xdr.InvokeContractArgs({
+          contractAddress: Address.fromString(
+            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+          ).toScAddress(),
+          functionName: "transfer",
+          args: [],
+        })
+      ),
+      subInvocations: [],
+    });
+    const shared = resolveDeployer();
+
+    await expect(
+      manager(shared).signDeploy(deployTransaction(shared, NULL_ACCOUNT, [child]))
+    ).rejects.toThrow(/matching address authorization/);
   });
 
   it("keeps custom deploySource on the signed self-source envelope path", async () => {

@@ -5,15 +5,17 @@ v1 is a ground-up overhaul of the contract, SDK, and services. It has **no backw
 > [!IMPORTANT]
 > **Contract compatibility.** v1 is a new on-chain contract (new WASM hash, renumbered errors, new event schema, timestamp expirations). Wallets deployed from the pre-1.0 contract remain live and keep their addresses (the [derivation tuple](./deployments-testnet-2026-07-11.md#deterministic-wallet-address-derivation-normative) is unchanged), but they run the legacy code until upgraded in place. A v1 SDK talks to v1 wallets; it still *decodes* legacy error codes (family `SmartWalletLegacy`) so failures from a legacy wallet are legible.
 
-## Unreleased: shared deploy and restore sources
+## 0.15.0: shared deploy and restore sources
 
 Shared-default-deployer wallet creation is now sign-only. `createWallet()` still
 returns `signedTx` for API compatibility, but for the shared deployer that value
 is an authorized carrier with no usable source or envelope signature.
 `PasskeyServer.send(signedTx)` extracts and relays `{ func, auth }`; the relayer
-supplies the envelope source, sequence, and fees. A configured relayer is
-therefore required. A custom `deploySource` keeps the self-sourced signed
-envelope path.
+supplies the envelope source, sequence, and fees. Submitting *through
+`PasskeyServer.send()`* therefore requires a configured relayer — building does
+not. `PasskeyKit` never touches a relayer, so you may extract the carrier's
+`{ func, auth }` and submit it through any funded source you control. A custom
+`deploySource` keeps the self-sourced signed envelope path.
 
 The sibling smart-account-kit exposes this split as
 `relayerPayload: { func, auth }` for shared deployments and an optional

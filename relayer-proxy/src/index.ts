@@ -579,6 +579,13 @@ function validateXdrSubmission(env: Env, body: Extract<SubmissionBody, { mode: "
     throw new RequestError("xdr must be a signed transaction envelope");
   }
 
+  // A shared deployer is allowlisted as the CreateContractV2 `FromAddress` (it
+  // authorizes the deployment), never as the envelope source: its secret is
+  // publicly derivable, so anyone could sign such an envelope and spend its
+  // sequence. The `{ func, auth }` route is the only shared-deployer path.
+  if (SHARED_DEPLOYERS.has(transaction.source)) {
+    throw new RequestError("Shared deployer may not source signed xdr", 403);
+  }
   if (transaction.operations.length !== 1) {
     throw new RequestError("Deploy transaction must contain exactly one operation", 403);
   }

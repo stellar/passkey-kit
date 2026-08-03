@@ -83,7 +83,17 @@ This is an accepted, documented residual:
   credential ID.
 - A normal WebAuthn registration does not publish its credential ID before the
   client deploys, and a new registration creates a fresh credential.
-- The realistic window is a leaked/reused ID or a delayed/failed deployment.
+- **Across networks, that last point does not hold.** Deploying a wallet
+  publishes its `keyId`: it is stored on-chain in the signer entry, and the
+  hosted indexer resolves it (`GET /api/lookup/:credentialId`). The network
+  passphrase is part of the address preimage but the `keyId` is not
+  network-scoped, so the same passkey maps to a different, not-yet-deployed
+  address on every other network. Anyone can therefore read a testnet wallet's
+  `keyId` and occupy the matching mainnet address — no race, no leak, no access
+  to the user. Register a fresh credential per network rather than reusing a
+  passkey that already has a wallet deployed on another one.
+- The realistic same-network window is a leaked/reused ID or a delayed/failed
+  deployment.
 - The impact is griefing or a deposit sent to the wrong precomputed address,
   not control of a correctly deployed wallet. The deployer is never a wallet
   signer.

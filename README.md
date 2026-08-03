@@ -148,7 +148,7 @@ Browser-side facade for wallet lifecycle and signing. Holds no secrets.
 | `networkPassphrase` | `string` | Yes | Network passphrase. |
 | `walletWasmHash` | `string` (hex) | Yes | Smart-wallet WASM hash used to deploy new wallets. |
 | `rpId` | `string` | No | WebAuthn Relying Party id (domain). Defaults to the current origin. |
-| `deploySource` | `string` (`S…`) | No | Secret key for the fee-paying deployer. Defaults to the canonical deterministic deployer. **Overriding it changes derived wallet addresses** (see [Deterministic derivation](#deterministic-derivation)). |
+| `deploySource` | `string` (`S…`) | No | Secret key for a deployer you control, which then sources and pays for its own deployments. Defaults to the canonical deterministic deployer, which is sign-only and never pays. **Overriding it changes derived wallet addresses** (see [Deterministic derivation](#deterministic-derivation)). |
 | `timeoutInSeconds` | `number` | No | Transaction time bound (default `30`; the relayer requires `<= 30`). |
 | `storage` | `StorageAdapter` | No | Passkey-record persistence (see [Storage adapters](#storage-adapters)). |
 | `WebAuthn` | `WebAuthnClient` | No | Custom `startRegistration`/`startAuthentication` (for testing). |
@@ -160,7 +160,7 @@ Browser-side facade for wallet lifecycle and signing. Holds no secrets.
 | `keyId` | `string \| undefined` | Connected passkey's base64url credential id. |
 | `wallet` | `PasskeyClient \| undefined` | Connected wallet's generated contract client. |
 | `contractId` | `string \| undefined` | Connected wallet address (getter). |
-| `deployerPublicKey` | `string` | The fee-paying deployer's `G…` address (getter). |
+| `deployerPublicKey` | `string` | The deployer's `G…` address (getter). Pays only when it is a custom `deploySource`. |
 | `networkPassphrase` / `rpcUrl` / `walletWasmHash` / `rpId` | `string` | The resolved config. |
 | `events` | `PasskeyEventEmitter` | Lifecycle events: `walletCreated`, `walletConnected`, `walletDisconnected`. |
 
@@ -169,7 +169,7 @@ Browser-side facade for wallet lifecycle and signing. Holds no secrets.
 | Method | Returns | Description |
 |---|---|---|
 | `createKey(appName, userName, options?)` | `CreatedPasskey` | Run a passkey registration ceremony **without** deploying a wallet. |
-| `createWallet(appName, userName, options?)` | `CreateWalletResult` | Register a passkey and build a signed deploy transaction (initializes the wallet via `__constructor` with the passkey as the first signer). Submit the returned `signedTx` via `PasskeyServer`. |
+| `createWallet(appName, userName, options?)` | `CreateWalletResult` | Register a passkey and build a deploy carrier (initializes the wallet via `__constructor` with the passkey as the first signer). For the shared deployer the carrier holds a signed authorization entry and no envelope signature. Submit the returned `signedTx` via `PasskeyServer`. |
 | `connectWallet(options?)` | `ConnectWalletResult` | Resolve a wallet from a passkey (derivation → storage → injected indexer lookup) and **verify** the passkey is a live signer on it. |
 | `disconnect()` | `void` | Clear the connected wallet/keyId. |
 | `requireWallet()` | `PasskeyClient` | Return the connected wallet or throw `WalletNotConnectedError`. |
@@ -305,7 +305,7 @@ All wallet writes are fee-sponsored by the [OpenZeppelin Relayer Channels](https
 Two submission modes are chosen automatically:
 
 - **`{ func, auth }`** (`submitSorobanTransaction`) — for wallet invocations (transfers, signer management) whose auth is carried by Address credentials. The relayer builds the envelope.
-- **`{ xdr }`** (`submitTransaction`) — for an already-signed envelope that needs a fee bump (deploys / source-account auth).
+- **`{ xdr }`** (`submitTransaction`) — for an already-signed envelope that needs a fee bump (custom-`deploySource` deploys / source-account auth). Shared-deployer deploys never take this path.
 
 ### Browsers: the relayer-proxy worker
 
@@ -487,7 +487,7 @@ contractId = sha256(XDR(HashIdPreimage::EnvelopeTypeContractId {
 }))
 ```
 
-- The canonical deployer keypair is `Keypair.fromRawEd25519Seed(sha256("kalepail"))`. It only pays fees and salts the deploy — it never controls the wallet — but its determinism is **load-bearing**: overriding `deploySource` changes every derived address and breaks keyId → wallet discovery.
+- The canonical deployer keypair is `Keypair.fromRawEd25519Seed(sha256("kalepail"))`. It salts the deploy and signs the deploy authorization — it never pays fees and never controls the wallet — but its determinism is **load-bearing**: overriding `deploySource` changes every derived address and breaks keyId → wallet discovery.
 - The WASM hash is deliberately **not** in the preimage, so an `upgrade` never moves a wallet's address.
 
 This tuple is normative and must never change. See [`docs/deployments-testnet-2026-07-11.md`](./docs/deployments-testnet-2026-07-11.md) for the canonical WASM hashes, the deployer `G…` address, and the full derivation spec (including the deploy-front-running consequence in [Caveats](#caveats)).

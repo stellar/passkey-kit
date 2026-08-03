@@ -117,7 +117,10 @@ export class SubmissionManager {
         !Buffer.from(authorizedCreate.toXDR()).equals(operationCreate.toXDR()) ||
         !fromAddress ||
         Address.fromScAddress(fromAddress.address()).toString() !==
-          this.deployerPublicKey
+          this.deployerPublicKey ||
+        // The deployer signs the whole tree, so anything hanging off the root
+        // would be authorized too. A deployment needs no sub-invocations.
+        auth[0].rootInvocation().subInvocations().length !== 0
       ) {
         throw new Error(
           "shared deploy simulation did not return one matching address authorization"
