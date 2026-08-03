@@ -9,7 +9,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Networks, xdr } from "@stellar/stellar-sdk";
+import { Keypair, Networks, xdr } from "@stellar/stellar-sdk";
 import type { Spec as ContractSpec } from "@stellar/stellar-sdk/contract";
 import { Client as PasskeyClient, type SignerVal } from "passkey-kit-sdk";
 import { PasskeyKit } from "./kit.js";
@@ -33,6 +33,46 @@ function makeKit(): PasskeyKit {
     } as never,
   });
 }
+
+describe("restore source resolution", () => {
+  /** Read the keypair the kit wired into SubmissionManager for restores. */
+  const restoreKeypairOf = (kit: PasskeyKit) =>
+    (kit as unknown as { submissionManager: { deps: { restoreKeypair?: { publicKey(): string } } } })
+      .submissionManager.deps.restoreKeypair;
+
+  const base = {
+    rpcUrl: "https://rpc.example",
+    networkPassphrase: Networks.TESTNET,
+    walletWasmHash: WASM_HASH,
+    WebAuthn: { startRegistration: vi.fn(), startAuthentication: vi.fn() } as never,
+  };
+
+  it("leaves restores unconfigured for the SHARED default deployer", () => {
+    // The shared deployer must never source or fund a transaction, so there is
+    // deliberately no fallback — restoreFootprint fails closed until the
+    // integrator supplies a funded restoreSource.
+    expect(restoreKeypairOf(new PasskeyKit({ ...base }))).toBeUndefined();
+  });
+
+  it("falls back to a CUSTOM funded deploySource (address-preserving)", () => {
+    const custom = Keypair.random();
+    const kit = new PasskeyKit({ ...base, deploySource: custom.secret() });
+    // Custom deployers keep their pre-existing ability to source restores; their
+    // derived addresses are unaffected because the deployer identity is unchanged.
+    expect(restoreKeypairOf(kit)?.publicKey()).toBe(custom.publicKey());
+  });
+
+  it("prefers an explicit restoreSource over the custom deploySource", () => {
+    const custom = Keypair.random();
+    const restore = Keypair.random();
+    const kit = new PasskeyKit({
+      ...base,
+      deploySource: custom.secret(),
+      restoreSource: restore.secret(),
+    });
+    expect(restoreKeypairOf(kit)?.publicKey()).toBe(restore.publicKey());
+  });
+});
 
 /** A ledger entry whose contractData().val() decodes to a live SignerVal. */
 function signerEntry() {

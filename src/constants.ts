@@ -65,12 +65,23 @@ export const WEBAUTHN_CHALLENGE_SIZE = 32;
  * `deployer = this keypair`), which is exactly what the indexer reverse-lookup
  * (keyId → contract) depends on.
  *
- * This value MUST remain `"kalepail"`: every wallet ever deployed by passkey-kit
- * used this deployer, and the derivation is load-bearing for discovery. The
- * deployer only pays fees and salts the deploy — it never controls the wallet —
- * but it IS a shared, publicly-derivable keypair. Provide your own
- * `deploySource` secret for a dedicated fee payer (note: a different deployer
+ * This value MUST remain `"kalepail"`: it is the current deterministic deployer,
+ * and the derivation is load-bearing for keyId → contract discovery. (Wallets
+ * deployed BEFORE commit 23597d8 used an earlier scheme — the deployer was
+ * derived from `sha256(networkPassphrase)` — so those wallets live under
+ * different, legacy deployer addresses; see the deployer inventory in
+ * docs/security-deterministic-deployer.md. It is NOT true that every wallet ever
+ * used this seed.) The deployer salts and signs deploy authorization entries — it
+ * never controls the wallet and is never the default transaction source. Provide
+ * your own `deploySource` only to change the derivation identity (note: doing so
  * changes the derived contract addresses and breaks keyId → contract discovery).
+ *
+ * ⚠️ SECURITY: the seed is a published constant, so the SECRET key is publicly
+ * derivable and the account is SHARED across default-configured integrators.
+ * The relayer/channel supplies deploy sequence and fees; footprint restores use
+ * the separate `restoreSource`. The shared account's balance and sequence are
+ * therefore irrelevant to SDK deploys.
+ * See docs/security-deterministic-deployer.md.
  */
 export const DEFAULT_DEPLOYER_SEED = "kalepail";
 

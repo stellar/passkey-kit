@@ -2,6 +2,26 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.15.0 — 2026-08-03
+
+- **Breaking: shared-deployer wallet creation is relayer-only.** The default
+  deployer now signs only the CreateContractV2 authorization entry. The
+  `signedTx` returned by `createWallet()` is an authorized carrier from which
+  `PasskeyServer.send()` submits `{ func, auth }`; it is not a deployer-signed
+  transaction envelope. Submitting *through `PasskeyServer.send()`* requires a
+  configured relayer; building does not — `PasskeyKit` never touches a relayer,
+  so you may extract the carrier's `{ func, auth }` and submit it through any
+  funded source you control. A custom
+  `deploySource` retains the self-sourced signed-envelope path. In
+  smart-account-kit terminology, the shared result is `relayerPayload` and
+  `signedTransaction` is optional and custom-deployer-only; passkey-kit retains
+  its existing `signedTx` carrier field.
+- **Footprint restoration has a separate `restoreSource`.** Configure it with a
+  funded `S…` account when restores are needed. It does not fall back to
+  `deploySource`, and the shared deployer is rejected. Do not rotate
+  `deploySource` to fund restores: it is part of deterministic address
+  derivation, so changing it changes every derived wallet address.
+
 ## 0.14.0 — 2026-07-14
 
 Robustness, validation, and test-coverage improvements across the contract, SDK, and relayer-proxy. All changes are forward-only. Bindings package `passkey-kit-sdk` is bumped to `0.8.0`. **Breaking:** `updateSecp256r1` drops its `publicKey` parameter (`updateSecp256r1(keyId, limits, store, expiration?)`).

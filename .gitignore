@@ -184,3 +184,5 @@ package/
 target/
 
 ext/js-stellar-sdk/
+# Local audit/review scratch — never committed
+docs/history/

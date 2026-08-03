@@ -34,6 +34,7 @@ import {
   usesAddressBoundPayload,
 } from "./auth-payload.js";
 import { SigningError, PasskeyKitError, PasskeyKitErrorCode } from "../errors.js";
+import { isDefaultDeployer } from "../utils.js";
 
 /** Deps for computing a default signature-expiration ledger. */
 export interface ExpirationDeps {
@@ -171,12 +172,12 @@ export interface RestorePreamble {
 
 /**
  * Restore an archived contract-data footprint reported by simulation, paying
- * with the deployer keypair.
+ * with the independently configured restore source.
  *
  * Soroban simulation returns a `restorePreamble` when the transaction touches
  * archived entries; the footprint must be restored (a separate, fee-bearing
- * transaction) before the real transaction can succeed. The deployer keypair
- * pays because it is the on-chain fee source the kit already controls.
+ * transaction) before the real transaction can succeed. This source is
+ * deliberately separate from the address-derivation deployer identity.
  *
  * Returns the restore transaction hash. This path is exercised live in F2 (it
  * requires archived on-chain state to trigger).
@@ -187,12 +188,27 @@ export async function restoreFootprint(
   deps: {
     rpc: Server;
     networkPassphrase: string;
-    deployerKeypair: Keypair;
+    sourceKeypair?: Keypair;
     timeoutInSeconds: number;
   },
   restorePreamble: RestorePreamble
 ): Promise<string> {
-  const account = await deps.rpc.getAccount(deps.deployerKeypair.publicKey());
+  if (!deps.sourceKeypair) {
+    throw new PasskeyKitError(
+      `Footprint restoration requires a funded \`restoreSource\` secret. ` +
+        `It is intentionally separate from \`deploySource\`, because changing ` +
+        `the deployer changes every derived wallet address.`,
+      PasskeyKitErrorCode.INVALID_CONFIG
+    );
+  }
+  if (isDefaultDeployer(deps.sourceKeypair.publicKey())) {
+    throw new PasskeyKitError(
+      "restoreSource must be a separate funded account, not the shared default deployer",
+      PasskeyKitErrorCode.INVALID_CONFIG
+    );
+  }
+
+  const account = await deps.rpc.getAccount(deps.sourceKeypair.publicKey());
   const fee = (Number(restorePreamble.minResourceFee) + 100_000).toString();
 
   const restoreTx = new TransactionBuilder(account, {
@@ -204,7 +220,7 @@ export async function restoreFootprint(
     .setTimeout(deps.timeoutInSeconds)
     .build();
 
-  restoreTx.sign(deps.deployerKeypair);
+  restoreTx.sign(deps.sourceKeypair);
 
   const sendResult = await deps.rpc.sendTransaction(restoreTx);
   if (sendResult.status === "ERROR") {

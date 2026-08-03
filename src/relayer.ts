@@ -10,7 +10,7 @@
  * - {@link RelayerClient.send} — `{ func, auth }` for invokeHostFunction flows
  *   (the preferred Soroban path; the relayer builds the envelope + pays fees).
  * - {@link RelayerClient.sendTransaction} — `{ xdr }` for a signed envelope
- *   (e.g. a deploy transaction that needs source-account auth + a fee bump).
+ *   (e.g. a custom-deployer transaction that needs a fee bump).
  *
  * Every method returns a discriminated {@link TransactionResult} and NEVER
  * throws for expected relayer/on-chain failures — a `PluginClientError` is
@@ -107,7 +107,7 @@ export class RelayerClient {
 
   /**
    * Submit a signed transaction envelope via `{ xdr }` for a fee bump (preserves
-   * the inner signature; use for deploys / source-account-auth transactions).
+   * the inner signature; use for custom-source / source-account-auth flows).
    */
   async sendTransaction(
     xdr: string,

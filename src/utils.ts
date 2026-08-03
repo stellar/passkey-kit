@@ -4,7 +4,7 @@
  * @packageDocumentation
  */
 
-import { StrKey, hash, xdr, Address } from "@stellar/stellar-sdk";
+import { StrKey, hash, xdr, Address, Keypair } from "@stellar/stellar-sdk";
 import type { RegistrationResponseJSON } from "@simplewebauthn/browser";
 import base64url from "./base64url.js";
 import {
@@ -14,7 +14,28 @@ import {
   SECP256R1_B,
   UNCOMPRESSED_PUBKEY_PREFIX,
   WEBAUTHN_CHALLENGE_SIZE,
+  DEFAULT_DEPLOYER_SEED,
 } from "./constants.js";
+
+/**
+ * Public key of the shared, deterministic default deployer, derived once from
+ * {@link DEFAULT_DEPLOYER_SEED}.
+ */
+export const DEFAULT_DEPLOYER_PUBLIC_KEY = Keypair.fromRawEd25519Seed(
+  hash(Buffer.from(DEFAULT_DEPLOYER_SEED))
+).publicKey();
+
+/**
+ * True when `publicKey` is the shared, publicly-derivable default deployer.
+ *
+ * That account is a **sign-only / address-derivation** identity: the SDK must
+ * never use it as a transaction source (its sequence can be bricked by anyone
+ * via `bumpSequence`) or fee payer (its balance is sweepable by anyone). It may
+ * only sign Soroban auth entries and salt the deploy.
+ */
+export function isDefaultDeployer(publicKey: string): boolean {
+  return publicKey === DEFAULT_DEPLOYER_PUBLIC_KEY;
+}
 import {
   ValidationError,
   WebAuthnError,

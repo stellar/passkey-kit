@@ -142,7 +142,7 @@ export interface CreateWalletResult {
   /** Deployed smart-wallet contract address. */
   contractId: string;
 
-  /** Signed deployment transaction, ready to submit (base64 XDR). */
+  /** Authorized deployment carrier, ready to submit (base64 XDR). */
   signedTx: string;
 }
 
