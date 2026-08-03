@@ -12,7 +12,7 @@
  * @packageDocumentation
  */
 
-import { xdr } from "@stellar/stellar-sdk";
+import { Keypair, xdr } from "@stellar/stellar-sdk";
 import { Server } from "@stellar/stellar-sdk/rpc";
 import {
   startAuthentication,
@@ -39,6 +39,7 @@ import {
   WalletOwnershipError,
 } from "./errors.js";
 import { PasskeyEventEmitter } from "./events.js";
+import { isDefaultDeployer } from "./utils.js";
 import { DEFAULT_TIMEOUT_SECONDS } from "./constants.js";
 import { PasskeySigner, type Signer, type SignerContext } from "./signers.js";
 import type { WebAuthnClient } from "./kit/webauthn-ops.js";
@@ -65,11 +66,13 @@ export interface PasskeyKitConfig {
   /** WebAuthn Relying Party id (domain); defaults to the current origin. */
   rpId?: string;
   /**
-   * Secret key (`S…`) for the fee-paying deployer. Defaults to the canonical
-   * deterministic deployer (see {@link resolveDeployer}); overriding it changes
-   * derived wallet addresses.
+   * Secret key (`S…`) for the address-derivation deployer. Defaults to the
+   * canonical shared sign-only deployer (see {@link resolveDeployer});
+   * overriding it changes derived wallet addresses.
    */
   deploySource?: string;
+  /** Funded secret key used only to source footprint-restoration transactions. */
+  restoreSource?: string;
   /** Transaction timeout, in seconds (default 30). */
   timeoutInSeconds?: number;
   /** Optional passkey-record storage adapter (see `passkey-kit/storage`). */
@@ -148,6 +151,24 @@ export class PasskeyKit {
       config.WebAuthn ?? ({ startRegistration, startAuthentication } as WebAuthnClient);
 
     const deployerKeypair = resolveDeployer(config.deploySource);
+    let restoreKeypair: Keypair | undefined;
+    if (config.restoreSource) {
+      try {
+        restoreKeypair = Keypair.fromSecret(config.restoreSource);
+      } catch {
+        throw new ConfigurationError(
+          "restoreSource must be a valid Stellar secret key (S…)",
+          PasskeyKitErrorCode.INVALID_CONFIG
+        );
+      }
+    } else if (!isDefaultDeployer(deployerKeypair.publicKey())) {
+      // No dedicated restoreSource, but the integrator supplied their OWN funded
+      // deploySource: keep the pre-existing behaviour and let it source restores.
+      // Address derivation is unaffected (their deployer identity is unchanged),
+      // so this stays address-preserving. Only the SHARED default deployer is
+      // refused — it must never source or fund a transaction.
+      restoreKeypair = deployerKeypair;
+    }
 
     this.credentialManager = new CredentialManager({
       rpId: this.rpId,
@@ -172,6 +193,7 @@ export class PasskeyKit {
       networkPassphrase: this.networkPassphrase,
       walletWasmHash: this.walletWasmHash,
       deployerKeypair,
+      restoreKeypair,
       timeoutInSeconds: this.timeoutInSeconds,
     });
   }
@@ -181,7 +203,7 @@ export class PasskeyKit {
     return this.wallet?.options.contractId;
   }
 
-  /** The fee-paying deployer's `G…` public key. */
+  /** The address-derivation deployer's `G…` public key. */
   get deployerPublicKey(): string {
     return this.submissionManager.deployerPublicKey;
   }
@@ -207,7 +229,7 @@ export class PasskeyKit {
 
   /**
    * Register a passkey and deploy a smart wallet initialized with it as the
-   * first signer. Returns the signed deploy transaction (submit it via
+   * first signer. Returns the authorized deploy carrier (submit it via
    * `PasskeyServer`).
    */
   async createWallet(

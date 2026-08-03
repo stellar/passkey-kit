@@ -20,13 +20,13 @@ import { deriveContractAddress } from "../utils.js";
 import { ConfigurationError, PasskeyKitErrorCode } from "../errors.js";
 
 /**
- * Resolve the fee-paying deployer keypair from an optional secret.
+ * Resolve the address-derivation deployer keypair from an optional secret.
  *
  * With no secret, derives the canonical deterministic deployer from
- * {@link DEFAULT_DEPLOYER_SEED}. The deployer only pays fees and salts the
- * deploy; it never controls the wallet. Supplying a different `deploySource`
- * changes the derived contract addresses (and breaks keyId → contract
- * discovery), so this is documented as an advanced option.
+ * {@link DEFAULT_DEPLOYER_SEED}. The default deployer only salts and authorizes
+ * deploys; it never controls the wallet or sources the transaction. Supplying a
+ * different `deploySource` changes the derived contract addresses (and breaks
+ * keyId → contract discovery), so this is documented as an advanced option.
  *
  * @throws {ConfigurationError} If `deploySource` is not a valid secret key.
  */
@@ -56,8 +56,9 @@ export function deriveWalletAddress(
  * Build the smart-wallet deploy transaction, initializing it with the passkey as
  * the first (unlimited, persistent) Secp256r1 signer via `__constructor`.
  *
- * The returned {@link AssembledTransaction} still needs to be signed by the
- * deployer keypair (the fee source) before submission.
+ * Shared-default deploys use the SDK's address-only build path, so simulation
+ * uses the null carrier account instead of reading the deployer's sequence.
+ * Custom deployers keep the normal account-source path.
  */
 export async function buildDeployTransaction(
   deps: {
@@ -65,6 +66,7 @@ export async function buildDeployTransaction(
     networkPassphrase: string;
     walletWasmHash: string;
     deployerPublicKey: string;
+    usingSharedDeployer: boolean;
     timeoutInSeconds: number;
   },
   keyId: Buffer,
@@ -87,7 +89,9 @@ export async function buildDeployTransaction(
       rpcUrl: deps.rpcUrl,
       wasmHash: deps.walletWasmHash,
       networkPassphrase: deps.networkPassphrase,
-      publicKey: deps.deployerPublicKey,
+      ...(deps.usingSharedDeployer
+        ? { address: deps.deployerPublicKey }
+        : { publicKey: deps.deployerPublicKey }),
       salt: hash(keyId),
       timeoutInSeconds: deps.timeoutInSeconds,
     }

@@ -60,6 +60,11 @@ const DEPLOYER_KEYPAIR = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 3));
 const DEPLOYER = DEPLOYER_KEYPAIR.publicKey();
 const WALLET_WASM_HASH = "84".repeat(32);
 const G_ADDRESS = `G${"A".repeat(55)}`;
+const SHARED_DEPLOYERS = [
+  "GC2C7AWLS2FMFTQAHW3IBUB4ZXVP4E37XNLEF2IK7IVXBB6CMEPCSXFO",
+  "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H",
+  "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7",
+];
 
 function makeApiKeyDO(opts: { key?: string | null; onGet?: () => void } = {}) {
   const key = opts.key === undefined ? DO_KEY : opts.key;
@@ -96,6 +101,7 @@ function makeEnv(
     rateLimitDO?: ReturnType<typeof makeRateLimitDO>;
     allowedContracts?: string;
     allowedWasmHashes?: string;
+    allowedDeployers?: string;
     origins?: string;
     maxFee?: string;
   } = {}
@@ -117,7 +123,7 @@ function makeEnv(
         ? WALLET_WASM_HASH
         : opts.allowedWasmHashes,
     ALLOWED_WALLET_FUNCTIONS: "add_signer,update_signer,remove_signer,upgrade",
-    ALLOWED_DEPLOYER_ADDRESSES: DEPLOYER,
+    ALLOWED_DEPLOYER_ADDRESSES: opts.allowedDeployers ?? DEPLOYER,
     MAX_RESOURCE_FEE_STROOPS: opts.maxFee ?? "1000000",
     RATE_LIMIT_WINDOW_SECONDS: "60",
     RATE_LIMIT_PER_IP: "10",
@@ -221,6 +227,67 @@ function walletSubmission(
   return {
     func: func.toXDR("base64"),
     auth: [auth.toXDR("base64")],
+  };
+}
+
+function deploySubmission(
+  opts: {
+    deployer?: string;
+    authDeployer?: string;
+    wasmHash?: string;
+    authWasmHash?: string;
+    v2Credentials?: boolean;
+    extraAuth?: boolean;
+    subInvocation?: boolean;
+  } = {}
+) {
+  const deployer = opts.deployer ?? DEPLOYER;
+  const makeFunc = (wasmHash: string) => {
+    const operation = Operation.createCustomContract({
+      address: Address.fromString(deployer),
+      wasmHash: Buffer.from(wasmHash, "hex"),
+      salt: Buffer.alloc(32, 4),
+      constructorArgs: [xdr.ScVal.scvVoid()],
+    });
+    return operation.body().invokeHostFunctionOp().hostFunction();
+  };
+  const func = makeFunc(opts.wasmHash ?? WALLET_WASM_HASH);
+  const authorizedFunc = makeFunc(
+    opts.authWasmHash ?? opts.wasmHash ?? WALLET_WASM_HASH
+  );
+  const addressCredentials = new xdr.SorobanAddressCredentials({
+    address: Address.fromString(opts.authDeployer ?? deployer).toScAddress(),
+    nonce: xdr.Int64.fromString("1"),
+    signatureExpirationLedger: 100,
+    signature: xdr.ScVal.scvVoid(),
+  });
+  const credentials = opts.v2Credentials
+    ? xdr.SorobanCredentials.sorobanCredentialsAddressV2(addressCredentials)
+    : xdr.SorobanCredentials.sorobanCredentialsAddress(addressCredentials);
+  const subInvocations = opts.subInvocation
+    ? [
+        new xdr.SorobanAuthorizedInvocation({
+          function:
+            xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+              contractFn(WALLET, "add_signer")
+            ),
+          subInvocations: [],
+        }),
+      ]
+    : [];
+  const auth = new xdr.SorobanAuthorizationEntry({
+    credentials,
+    rootInvocation: new xdr.SorobanAuthorizedInvocation({
+      function:
+        xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
+          authorizedFunc.createContractV2()
+        ),
+      subInvocations,
+    }),
+  }).toXDR("base64");
+  return {
+    func: func.toXDR("base64"),
+    auth: opts.extraAuth ? [auth, auth] : [auth],
   };
 }
 
@@ -505,7 +572,7 @@ describe("POST / validation and ordering", () => {
   });
 });
 
-describe("POST / func-path negative validation", () => {
+describe("POST / func-path validation", () => {
   async function submit(
     body: unknown,
     envOpts: Parameters<typeof makeEnv>[0] = {}
@@ -530,6 +597,84 @@ describe("POST / func-path negative validation", () => {
     expect(apiKeyDO.get).not.toHaveBeenCalled();
     expect(submitSorobanTransaction).not.toHaveBeenCalled();
   }
+
+  it("accepts one matching V1-authorized createContractV2", async () => {
+    const body = deploySubmission();
+    submitSorobanTransaction.mockResolvedValueOnce({
+      transactionId: "tx-deploy",
+      hash: "hash-deploy",
+      status: "confirmed",
+    });
+    const { res } = await submit(body);
+    expect(res.status).toBe(200);
+    expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
+  });
+
+  it("rejects a func deployer outside the allowlist", async () => {
+    const deployer = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 7)).publicKey();
+    const { res, apiKeyDO } = await submit(deploySubmission({ deployer }));
+    await expectRejected(
+      res,
+      apiKeyDO,
+      403,
+      "Deploy preimage address is not allowlisted"
+    );
+  });
+
+  it("rejects deploy auth from an address other than the allowed deployer", async () => {
+    const authDeployer = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 8)).publicKey();
+    const { res, apiKeyDO } = await submit(
+      deploySubmission({ authDeployer })
+    );
+    await expectRejected(
+      res,
+      apiKeyDO,
+      403,
+      "Deploy auth does not exactly match func and deployer"
+    );
+  });
+
+  it("rejects a func deploy with a non-allowlisted WASM", async () => {
+    const { res, apiKeyDO } = await submit(
+      deploySubmission({ wasmHash: "99".repeat(32) })
+    );
+    await expectRejected(res, apiKeyDO, 403, "Deploy WASM hash is not allowlisted");
+  });
+
+  it("rejects a func/auth deploy mismatch", async () => {
+    const { res, apiKeyDO } = await submit(
+      deploySubmission({ authWasmHash: "99".repeat(32) })
+    );
+    await expectRejected(
+      res,
+      apiKeyDO,
+      403,
+      "Deploy auth does not exactly match func and deployer"
+    );
+  });
+
+  it("rejects more than one deploy auth entry", async () => {
+    const { res, apiKeyDO } = await submit(
+      deploySubmission({ extraAuth: true })
+    );
+    await expectRejected(
+      res,
+      apiKeyDO,
+      403,
+      "Deploy must contain exactly one auth entry"
+    );
+  });
+
+  it("rejects V2 credentials and sub-invocations for deploy auth", async () => {
+    for (const body of [
+      deploySubmission({ v2Credentials: true }),
+      deploySubmission({ subInvocation: true }),
+    ]) {
+      const { res, apiKeyDO } = await submit(body);
+      expect(res.status).toBe(403);
+      expect(apiKeyDO.get).not.toHaveBeenCalled();
+    }
+  });
 
   it("rejects legacy V1 (non-address-bound) credentials", async () => {
     const { res, apiKeyDO } = await submit(
@@ -605,6 +750,18 @@ describe("POST / func-path negative validation", () => {
 
   it("rejects a simulated resource fee above the ceiling before minting", async () => {
     const { res, apiKeyDO } = await submit(walletSubmission(), {
+      maxFee: "1000",
+    });
+    await expectRejected(
+      res,
+      apiKeyDO,
+      413,
+      "Resource fee exceeds configured maximum"
+    );
+  });
+
+  it("applies the simulated fee ceiling to func deploys", async () => {
+    const { res, apiKeyDO } = await submit(deploySubmission(), {
       maxFee: "1000",
     });
     await expectRejected(
@@ -696,7 +853,7 @@ describe("POST / deploy (xdr) negative validation", () => {
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toEqual({
       success: false,
-      error: "Deploy preimage address is not the allowlisted source",
+      error: "Deploy preimage address is not allowlisted",
     });
     expect(apiKeyDO.get).not.toHaveBeenCalled();
   });
@@ -826,6 +983,27 @@ describe("POST / submission and errors", () => {
     expect(submitSorobanTransaction).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("friendbot"))).toBe(true);
   });
+
+  it.each(SHARED_DEPLOYERS)(
+    "never Friendbot-funds shared deployer %s",
+    async (deployer) => {
+      const fetchMock = stubFetch({});
+      submitSorobanTransaction
+        .mockRejectedValueOnce(new Error(`Account not found: ${deployer}`))
+        .mockResolvedValueOnce({
+          transactionId: "tx-shared",
+          hash: "hash-shared",
+          status: "success",
+        });
+      const res = await worker.fetch(
+        makeRequest("/", { method: "POST", body: walletSubmission() }),
+        makeEnv(),
+        ctx()
+      );
+      expect(res.status).toBe(200);
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("RequestRateLimiter", () => {

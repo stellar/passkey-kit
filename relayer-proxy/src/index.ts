@@ -53,6 +53,11 @@ const DO_KEY = "apiKey";
 const RATE_KEY = "rate";
 const GLOBAL_RATE_LIMITER = "global";
 const MAX_AUTH_ENTRIES = 8;
+const SHARED_DEPLOYERS = new Set([
+  "GC2C7AWLS2FMFTQAHW3IBUB4ZXVP4E37XNLEF2IK7IVXBB6CMEPCSXFO",
+  "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H",
+  "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7",
+]);
 
 type SubmissionBody =
   | { mode: "xdr"; xdr: string }
@@ -425,6 +430,32 @@ function validateAuthorizedInvocation(
   }
 }
 
+function validateDeployFunction(env: Env, func: xdr.HostFunction): string {
+  if (func.switch().name !== "hostFunctionTypeCreateContractV2") {
+    throw new RequestError("Only passkey-kit createContractV2 deploys are allowed", 403);
+  }
+
+  const deploy = func.createContractV2();
+  const executable = deploy.executable();
+  if (executable.switch().name !== "contractExecutableWasm") {
+    throw new RequestError("Deploy executable must be approved WASM", 403);
+  }
+  const wasmHash = Buffer.from(executable.wasmHash()).toString("hex").toLowerCase();
+  if (!configuredWasmHashes(env).has(wasmHash)) {
+    throw new RequestError("Deploy WASM hash is not allowlisted", 403);
+  }
+
+  const preimage = deploy.contractIdPreimage();
+  if (preimage.switch().name !== "contractIdPreimageFromAddress") {
+    throw new RequestError("Deploy must use an address contract-id preimage", 403);
+  }
+  const deployer = Address.fromScAddress(preimage.fromAddress().address()).toString();
+  if (!csvSet(env.ALLOWED_DEPLOYER_ADDRESSES).has(deployer)) {
+    throw new RequestError("Deploy preimage address is not allowlisted", 403);
+  }
+  return deployer;
+}
+
 async function validateFuncSubmission(env: Env, body: Extract<SubmissionBody, { mode: "func" }>): Promise<void> {
   let func: xdr.HostFunction;
   let auth: xdr.SorobanAuthorizationEntry[];
@@ -437,35 +468,61 @@ async function validateFuncSubmission(env: Env, body: Extract<SubmissionBody, { 
     throw new RequestError("func/auth contains invalid XDR");
   }
 
-  if (func.switch().name !== "hostFunctionTypeInvokeContract") {
-    throw new RequestError("Only invokeContract host functions are allowed", 403);
-  }
-  const invoke = func.invokeContract();
-  const contractId = Address.fromScAddress(invoke.contractAddress()).toString();
-  if (!(await walletContractIsAllowed(env, contractId))) {
-    throw new RequestError("Wallet contract is not allowlisted", 403);
-  }
-
-  const defaultFunctions = DEFAULT_WALLET_FUNCTIONS.join(",");
-  const functions = csvSet(env.ALLOWED_WALLET_FUNCTIONS ?? defaultFunctions);
-  const functionName = invoke.functionName().toString();
-  if (!functions.has(functionName)) {
-    throw new RequestError("Wallet function is not allowlisted", 403);
-  }
-
-  for (const entry of auth) {
+  if (func.switch().name === "hostFunctionTypeCreateContractV2") {
+    if (auth.length !== 1) {
+      throw new RequestError("Deploy must contain exactly one auth entry", 403);
+    }
+    const deployer = validateDeployFunction(env, func);
+    const entry = auth[0];
     const credentials = entry.credentials();
-    if (credentials.switch().name !== "sorobanCredentialsAddressV2") {
-      throw new RequestError("Only address-bound V2 wallet credentials are allowed", 403);
+    if (credentials.switch().name !== "sorobanCredentialsAddress") {
+      throw new RequestError("Deploy requires legacy V1 address credentials", 403);
     }
-    const signer = Address.fromScAddress(credentials.addressV2().address()).toString();
-    if (signer !== contractId) {
-      throw new RequestError("Auth credential is not for the invoked wallet", 403);
+    const signer = Address.fromScAddress(credentials.address().address()).toString();
+    const root = entry.rootInvocation();
+    const rootFunction = root.function();
+    if (
+      signer !== deployer ||
+      root.subInvocations().length !== 0 ||
+      rootFunction.switch().name !==
+        "sorobanAuthorizedFunctionTypeCreateContractV2HostFn" ||
+      !Buffer.from(rootFunction.createContractV2HostFn().toXDR()).equals(
+        Buffer.from(func.createContractV2().toXDR())
+      )
+    ) {
+      throw new RequestError("Deploy auth does not exactly match func and deployer", 403);
     }
-    validateAuthorizedInvocation(entry.rootInvocation(), contractId);
-    const root = entry.rootInvocation().function().contractFn();
-    if (!Buffer.from(root.toXDR()).equals(Buffer.from(invoke.toXDR()))) {
-      throw new RequestError("Auth root invocation does not match func", 403);
+  } else {
+    if (func.switch().name !== "hostFunctionTypeInvokeContract") {
+      throw new RequestError("Only invokeContract host functions are allowed", 403);
+    }
+    const invoke = func.invokeContract();
+    const contractId = Address.fromScAddress(invoke.contractAddress()).toString();
+    if (!(await walletContractIsAllowed(env, contractId))) {
+      throw new RequestError("Wallet contract is not allowlisted", 403);
+    }
+
+    const defaultFunctions = DEFAULT_WALLET_FUNCTIONS.join(",");
+    const functions = csvSet(env.ALLOWED_WALLET_FUNCTIONS ?? defaultFunctions);
+    const functionName = invoke.functionName().toString();
+    if (!functions.has(functionName)) {
+      throw new RequestError("Wallet function is not allowlisted", 403);
+    }
+
+    for (const entry of auth) {
+      const credentials = entry.credentials();
+      if (credentials.switch().name !== "sorobanCredentialsAddressV2") {
+        throw new RequestError("Only address-bound V2 wallet credentials are allowed", 403);
+      }
+      const signer = Address.fromScAddress(credentials.addressV2().address()).toString();
+      if (signer !== contractId) {
+        throw new RequestError("Auth credential is not for the invoked wallet", 403);
+      }
+      validateAuthorizedInvocation(entry.rootInvocation(), contractId);
+      const root = entry.rootInvocation().function().contractFn();
+      if (!Buffer.from(root.toXDR()).equals(Buffer.from(invoke.toXDR()))) {
+        throw new RequestError("Auth root invocation does not match func", 403);
+      }
     }
   }
 
@@ -538,27 +595,11 @@ function validateXdrSubmission(env: Env, body: Extract<SubmissionBody, { mode: "
   if (operation.source && operation.source !== transaction.source) {
     throw new RequestError("Operation source must match transaction source", 403);
   }
-  const func = (operation as Operation.InvokeHostFunction).func;
-  if (func.switch().name !== "hostFunctionTypeCreateContractV2") {
-    throw new RequestError("Only passkey-kit createContractV2 deploys are allowed", 403);
-  }
-
-  const deploy = func.createContractV2();
-  const executable = deploy.executable();
-  if (executable.switch().name !== "contractExecutableWasm") {
-    throw new RequestError("Deploy executable must be approved WASM", 403);
-  }
-  const wasmHash = Buffer.from(executable.wasmHash()).toString("hex").toLowerCase();
-  if (!configuredWasmHashes(env).has(wasmHash)) {
-    throw new RequestError("Deploy WASM hash is not allowlisted", 403);
-  }
-
-  const preimage = deploy.contractIdPreimage();
-  if (preimage.switch().name !== "contractIdPreimageFromAddress") {
-    throw new RequestError("Deploy must use an address contract-id preimage", 403);
-  }
-  const deployer = Address.fromScAddress(preimage.fromAddress().address()).toString();
-  if (deployer !== transaction.source || !allowedDeployers.has(deployer)) {
+  const deployer = validateDeployFunction(
+    env,
+    (operation as Operation.InvokeHostFunction).func
+  );
+  if (deployer !== transaction.source) {
     throw new RequestError("Deploy preimage address is not the allowlisted source", 403);
   }
 
@@ -592,6 +633,7 @@ export function extractMissingAccount(errorMessage: string): string | null {
 }
 
 async function fundWithFriendbot(account: string): Promise<boolean> {
+  if (SHARED_DEPLOYERS.has(account)) return false;
   try {
     return (
       await fetch(`${FRIENDBOT_URL}?addr=${encodeURIComponent(account)}`)

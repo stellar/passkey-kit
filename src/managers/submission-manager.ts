@@ -1,16 +1,14 @@
 /**
- * Submission manager: builds and signs the deploy transaction with the fee-
- * paying deployer keypair, derives deterministic wallet addresses, and drives
- * the footprint-restore flow.
+ * Submission manager: builds and authorizes deploys, derives deterministic
+ * wallet addresses, and drives the footprint-restore flow.
  *
  * Network submission itself is the server's job (`PasskeyServer` / relayer); this
- * manager owns the deployer keypair and the fee-payer signature that make a
- * deploy transaction submittable.
+ * manager owns the deployer identity and its deploy authorization signature.
  *
  * @packageDocumentation
  */
 
-import { TransactionBuilder } from "@stellar/stellar-sdk";
+import { Address, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import type { Keypair, Transaction } from "@stellar/stellar-sdk";
 import type { AssembledTransaction } from "@stellar/stellar-sdk/contract";
 import type { Server } from "@stellar/stellar-sdk/rpc";
@@ -23,6 +21,10 @@ import {
   restoreFootprint as restoreFootprintOp,
   type RestorePreamble,
 } from "../kit/tx-ops.js";
+import { buildSignaturePayload } from "../kit/auth-payload.js";
+import { isDefaultDeployer } from "../utils.js";
+
+const DEPLOY_AUTH_LIFETIME_LEDGERS = 720;
 
 export interface SubmissionManagerDeps {
   rpc: Server;
@@ -30,13 +32,14 @@ export interface SubmissionManagerDeps {
   networkPassphrase: string;
   walletWasmHash: string;
   deployerKeypair: Keypair;
+  restoreKeypair?: Keypair;
   timeoutInSeconds: number;
 }
 
 export class SubmissionManager {
   constructor(private readonly deps: SubmissionManagerDeps) {}
 
-  /** The deployer's `G…` public key (fee source + derivation deployer). */
+  /** The deployer's `G…` public key (address-derivation identity). */
   get deployerPublicKey(): string {
     return this.deps.deployerKeypair.publicKey();
   }
@@ -63,6 +66,7 @@ export class SubmissionManager {
         networkPassphrase: this.deps.networkPassphrase,
         walletWasmHash: this.deps.walletWasmHash,
         deployerPublicKey: this.deployerPublicKey,
+        usingSharedDeployer: isDefaultDeployer(this.deployerPublicKey),
         timeoutInSeconds: this.deps.timeoutInSeconds,
       },
       keyId,
@@ -71,23 +75,99 @@ export class SubmissionManager {
   }
 
   /**
-   * Sign a deploy transaction with the deployer keypair (the fee source) and
-   * return the signed transaction XDR.
+   * Authorize a deploy and return its carrier transaction XDR.
    *
-   * The deploy carries source-account auth, so it is submitted through the
-   * relayer's fee-bump (`{ xdr }`) path. A fee-bumped Soroban inner transaction
-   * must have `fee == resourceFee` — the fee-bump supplies the inclusion fee —
-   * or the relayer rejects it with a fee mismatch ("Transaction fee must be
-   * equal to the resource fee"). The assembled fee is `inclusion + resource`,
-   * so pin it to the resource fee BEFORE the deployer signs (the signature
-   * commits to the fee). `TransactionBuilder.cloneFrom` drops
-   * `SorobanTransactionData` (→ txMalformed), so set the fee field surgically on
-   * the envelope and rebuild.
+   * The shared deployer signs one address auth entry; the carrier has no usable
+   * source or envelope signature and `PasskeyServer` submits its `{func,auth}`.
+   * A custom deployer keeps the legacy self-source envelope path. Its inner fee
+   * must equal the resource fee before signing because the fee bump supplies the
+   * inclusion fee. `TransactionBuilder.cloneFrom` drops Soroban data, so that
+   * fee field is changed directly on the envelope.
    */
   async signDeploy(tx: AssembledTransaction<PasskeyClient>): Promise<string> {
     if (!tx.built) {
       throw new Error("deploy transaction has not been built/simulated");
     }
+
+    if (isDefaultDeployer(this.deployerPublicKey)) {
+      const operation = tx.built.operations[0];
+      const auth = operation?.type === "invokeHostFunction" ? operation.auth ?? [] : [];
+      const latestLedger = tx.simulation?.latestLedger;
+      const authorizedFunction = auth[0]?.rootInvocation().function();
+      const authorizedCreate =
+        authorizedFunction?.switch().name ===
+        "sorobanAuthorizedFunctionTypeCreateContractV2HostFn"
+          ? authorizedFunction.createContractV2HostFn()
+          : undefined;
+      const operationCreate =
+        operation?.type === "invokeHostFunction" &&
+        operation.func.switch().name === "hostFunctionTypeCreateContractV2"
+          ? operation.func.createContractV2()
+          : undefined;
+      const fromAddress = authorizedCreate?.contractIdPreimage().fromAddress();
+
+      if (
+        tx.built.operations.length !== 1 ||
+        tx.built.source === this.deployerPublicKey ||
+        tx.built.signatures.length !== 0 ||
+        auth.length !== 1 ||
+        latestLedger === undefined ||
+        !authorizedCreate ||
+        !operationCreate ||
+        !Buffer.from(authorizedCreate.toXDR()).equals(operationCreate.toXDR()) ||
+        !fromAddress ||
+        Address.fromScAddress(fromAddress.address()).toString() !==
+          this.deployerPublicKey
+      ) {
+        throw new Error(
+          "shared deploy simulation did not return one matching address authorization"
+        );
+      }
+
+      const nonceBytes = crypto.getRandomValues(new Uint8Array(8));
+      const expirationLedger = latestLedger + DEPLOY_AUTH_LIFETIME_LEDGERS;
+      const credentials = new xdr.SorobanAddressCredentials({
+        address: Address.fromString(this.deployerPublicKey).toScAddress(),
+        nonce: xdr.Int64.fromString(
+          Buffer.from(nonceBytes).readBigInt64BE().toString()
+        ),
+        signatureExpirationLedger: expirationLedger,
+        signature: xdr.ScVal.scvVoid(),
+      });
+      const signedEntry = new xdr.SorobanAuthorizationEntry({
+        credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(credentials),
+        rootInvocation: auth[0]!.rootInvocation(),
+      });
+      credentials.signature(
+        xdr.ScVal.scvVec([
+          xdr.ScVal.scvMap([
+            new xdr.ScMapEntry({
+              key: xdr.ScVal.scvSymbol("public_key"),
+              val: xdr.ScVal.scvBytes(this.deps.deployerKeypair.rawPublicKey()),
+            }),
+            new xdr.ScMapEntry({
+              key: xdr.ScVal.scvSymbol("signature"),
+              val: xdr.ScVal.scvBytes(
+                this.deps.deployerKeypair.sign(
+                  buildSignaturePayload(
+                    this.deps.networkPassphrase,
+                    signedEntry,
+                    expirationLedger
+                  )
+                )
+              ),
+            }),
+          ]),
+        ])
+      );
+
+      const envelope = tx.built.toEnvelope();
+      envelope.v1().tx().operations()[0]!.body().invokeHostFunctionOp().auth([
+        signedEntry,
+      ]);
+      return envelope.toXDR("base64");
+    }
+
     const envelope = tx.built.toEnvelope();
     const inner = envelope.v1().tx();
     const resourceFee = inner.ext().sorobanData().resourceFee().toString();
@@ -107,7 +187,7 @@ export class SubmissionManager {
       {
         rpc: this.deps.rpc,
         networkPassphrase: this.deps.networkPassphrase,
-        deployerKeypair: this.deps.deployerKeypair,
+        sourceKeypair: this.deps.restoreKeypair,
         timeoutInSeconds: this.deps.timeoutInSeconds,
       },
       restorePreamble

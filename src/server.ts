@@ -140,10 +140,10 @@ export class PasskeyServer {
   /**
    * Submit a transaction via the relayer for fee sponsorship.
    *
-   * invokeHostFunction transactions without source-account auth use the preferred
-   * `{ func, auth }` Soroban path; everything else (deploys, source-account auth)
-   * is fee-bumped via the `{ xdr }` envelope path. Never throws — returns a typed
-   * {@link TransactionResult}.
+   * Single-op invokeHostFunction transactions without source-account auth use
+   * the preferred `{ func, auth }` Soroban path (including shared-deployer
+   * deploys); everything else is fee-bumped via `{ xdr }`. Never throws —
+   * returns a typed {@link TransactionResult}.
    */
   async send(
     input: AssembledTransaction<unknown> | Transaction | string,
@@ -172,8 +172,17 @@ export class PasskeyServer {
       );
     }
 
+    // The {func,auth} path submits exactly ONE host function — the relayer
+    // rebuilds the envelope around it. Only take it when the transaction is a
+    // single invokeHostFunction op; a multi-op envelope must go through the
+    // full-envelope fee-bump path or its extra operations would be silently
+    // dropped (and could report success after executing only the first).
     const op = built.operations[0];
-    if (op?.type === "invokeHostFunction" && !hasSourceAccountAuth(built)) {
+    if (
+      built.operations.length === 1 &&
+      op?.type === "invokeHostFunction" &&
+      !hasSourceAccountAuth(built)
+    ) {
       const invokeOp = op as Operation.InvokeHostFunction;
       const func = invokeOp.func.toXDR("base64");
       const auth = (invokeOp.auth ?? []).map((entry) => entry.toXDR("base64"));
