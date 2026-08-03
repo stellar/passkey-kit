@@ -8,7 +8,10 @@ All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry cover
   deployer now signs only the CreateContractV2 authorization entry. The
   `signedTx` returned by `createWallet()` is an authorized carrier from which
   `PasskeyServer.send()` submits `{ func, auth }`; it is not a deployer-signed
-  transaction envelope. A configured relayer is required. A custom
+  transaction envelope. Submitting *through `PasskeyServer.send()`* requires a
+  configured relayer; building does not — `PasskeyKit` never touches a relayer,
+  so you may extract the carrier's `{ func, auth }` and submit it through any
+  funded source you control. A custom
   `deploySource` retains the self-sourced signed-envelope path. In
   smart-account-kit terminology, the shared result is `relayerPayload` and
   `signedTransaction` is optional and custom-deployer-only; passkey-kit retains
