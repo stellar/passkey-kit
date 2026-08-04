@@ -92,11 +92,24 @@ This is an accepted, documented residual:
   `keyId` and occupy the matching mainnet address — no race, no leak, no access
   to the user. Register a fresh credential per network rather than reusing a
   passkey that already has a wallet deployed on another one.
-- The realistic same-network window is a leaked/reused ID or a delayed/failed
-  deployment.
-- The impact is griefing or a deposit sent to the wrong precomputed address,
-  not control of a correctly deployed wallet. The deployer is never a wallet
-  signer.
+- **Same-network, the "before deployment" framing also fails for secondary
+  credentials.** Only a wallet's FIRST credential salts its deploy, so
+  `derive(keyId_1)` is the wallet itself. Every later signer added via
+  `add_signer` publishes its `keyId` on-chain (a `signer_added` topic; the
+  hosted indexer re-serves it), yet `derive(keyId_2)` is a distinct address that
+  is never legitimately deployed. It is therefore squattable indefinitely — no
+  race, no leak, no delayed/failed deployment required. A single-passkey wallet's
+  only same-network window is the narrower leaked/reused-ID or delayed-deployment
+  case; a multi-passkey wallet has a permanently open one per secondary key.
+- The impact is griefing or value sent to the wrong precomputed address, not
+  control of a correctly deployed wallet — the deployer is never a wallet signer.
+  The one SDK-level consequence was that `connectWallet` resolved a secondary
+  `keyId` by derivation first, so a squat at `derive(keyId_2)` could win over the
+  correct wallet; resolution is now trusted-state-first (storage → indexer →
+  derivation) with a live-signer ownership check, so a squat no longer misbinds
+  a returning user. A first connect on a fresh device with no local record still
+  falls through to the indexer, whose reverse lookup is existence-only — closing
+  that needs the code/provenance binding described next.
 
 A signer-set-equality check **alone is not a mitigation**. Arbitrary code at a
 squatted address can implement `get_signer`, `list`, or an equivalent getter and

@@ -170,7 +170,7 @@ Browser-side facade for wallet lifecycle and signing. Holds no secrets.
 |---|---|---|
 | `createKey(appName, userName, options?)` | `CreatedPasskey` | Run a passkey registration ceremony **without** deploying a wallet. |
 | `createWallet(appName, userName, options?)` | `CreateWalletResult` | Register a passkey and build a deploy carrier (initializes the wallet via `__constructor` with the passkey as the first signer). For the shared deployer the carrier holds a signed authorization entry and no envelope signature. Submit the returned `signedTx` via `PasskeyServer`. |
-| `connectWallet(options?)` | `ConnectWalletResult` | Resolve a wallet from a passkey (derivation → storage → injected indexer lookup) and **verify** the passkey is a live signer on it. |
+| `connectWallet(options?)` | `ConnectWalletResult` | Resolve a wallet from a passkey (local storage → injected indexer lookup → deterministic derivation) and **verify** the passkey is a live signer on it. |
 | `disconnect()` | `void` | Clear the connected wallet/keyId. |
 | `requireWallet()` | `PasskeyClient` | Return the connected wallet or throw `WalletNotConnectedError`. |
 
@@ -181,7 +181,7 @@ Browser-side facade for wallet lifecycle and signing. Holds no secrets.
 | Option | Type | Description |
 |---|---|---|
 | `keyId` | `string \| Uint8Array` | Connect a specific credential, skipping the discovery ceremony. |
-| `getContractId` | `(keyId: string) => Promise<string \| undefined>` | Indexer-backed keyId → wallet lookup, used only when derivation and storage both miss. |
+| `getContractId` | `(keyId: string) => Promise<string \| undefined>` | Indexer-backed keyId → wallet lookup, tried after local storage and before deterministic derivation. |
 | `verifyWasmHash` | `boolean` | Also assert the wallet's on-chain WASM hash equals `walletWasmHash`. Off by default (an upgraded wallet legitimately runs a different hash). |
 
 ### Signing methods
@@ -313,7 +313,7 @@ The relayer API key is a secret, so a browser must never hold it. The [`relayer-
 
 ## Discovery (indexer)
 
-Because every wallet address is derived deterministically from its passkey credential id (see [Deterministic derivation](#deterministic-derivation)), the primary "reconnect" path needs no indexer — `connectWallet` re-derives the address and confirms ownership on-chain. An indexer is for **richer discovery**: enumerating a wallet's full signer set, and reverse-looking-up which wallets a given signer belongs to.
+The "reconnect" path needs no indexer: `connectWallet` resolves from a stored passkey → wallet association or, failing that, deterministic derivation (see [Deterministic derivation](#deterministic-derivation)), then confirms ownership on-chain. Derivation is a last resort because it is only correct for a wallet's first credential and is the one resolution path a squatted contract can hijack — trusted storage wins. An indexer is for **richer discovery**: enumerating a wallet's full signer set, and reverse-looking-up which wallets a given signer belongs to.
 
 The SDK abstracts discovery behind a `SignerIndexer` interface (`getSigners` / `findWallets` / `health`), implemented by the **keyless** `MercuryIndexer` — exported from the main `passkey-kit` entry (no secret, so it runs in the browser):
 

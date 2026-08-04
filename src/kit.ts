@@ -275,10 +275,12 @@ export class PasskeyKit {
   /**
    * Connect an existing wallet from a passkey.
    *
-   * Resolves the wallet address by (1) deterministic derivation from the keyId,
-   * (2) local storage, then (3) an injected indexer lookup — and then VERIFIES
+   * Resolves the wallet address by (1) local storage, (2) an injected indexer
+   * lookup, then (3) deterministic derivation from the keyId — and then VERIFIES
    * ownership: the keyId must resolve to a live signer on the wallet (#601 F7).
    * This closes the unverified reverse-lookup hole (#598 F3) at the SDK layer.
+   * Derivation is deliberately last: it is only correct for a wallet's first
+   * credential and is the one path a squatted contract can hijack.
    *
    * @throws {WalletOwnershipError} If the keyId is not a signer on the wallet.
    */
@@ -297,19 +299,27 @@ export class PasskeyKit {
     const keyIdBuffer =
       keyId instanceof Uint8Array ? Buffer.from(keyId) : base64url.toBuffer(keyId);
 
-    // 1) Deterministic derivation, confirmed by an on-chain instance read.
-    // Transport errors (429/5xx/timeout) propagate — only an authoritative
-    // not-found may abandon the canonical derivation for the less-trusted
-    // storage/indexer fallbacks.
+    // Resolve the wallet address. Deterministic derivation is authoritative
+    // ONLY for a wallet's first credential (the one whose keyId salted the
+    // deploy); for every later signer `derive(keyId)` points at an address that
+    // is never legitimately deployed, and is the one resolution path an attacker
+    // can poison by squatting code at that derived address. So trusted state
+    // wins and derivation is a last-resort hint, confirmed by an on-chain read:
+    //   1) local storage, 2) injected indexer lookup, 3) derivation.
+    // The keyId is still verified as a live signer below (F7), so a stale hint
+    // can never connect to a wallet the passkey does not actually control.
     let contractId: string | undefined =
-      this.submissionManager.deriveWalletAddress(keyIdBuffer);
-    if (!(await contractInstanceExists(this.rpc, contractId))) {
-      // 2) local storage, then 3) injected indexer lookup.
-      contractId =
-        (await this.credentialManager.lookupContractId(keyIdBase64)) ??
-        (options?.getContractId
-          ? await options.getContractId(keyIdBase64)
-          : undefined);
+      (await this.credentialManager.lookupContractId(keyIdBase64)) ??
+      (options?.getContractId
+        ? await options.getContractId(keyIdBase64)
+        : undefined);
+    if (!contractId) {
+      // Transport errors (429/5xx/timeout) propagate — only an authoritative
+      // not-found leaves the derived address unresolved.
+      const derived = this.submissionManager.deriveWalletAddress(keyIdBuffer);
+      if (await contractInstanceExists(this.rpc, derived)) {
+        contractId = derived;
+      }
     }
 
     if (!contractId) {
@@ -425,14 +435,43 @@ export class PasskeyKit {
 
   // -- Signer management -------------------------------------------------------
 
-  addSecp256r1(
+  async addSecp256r1(
     keyId: string | Uint8Array,
     publicKey: string | Uint8Array,
     limits: SignerLimits,
     store: SignerStore,
     expiration?: number
   ): Promise<WalletTx> {
-    return this.signerManager.addSecp256r1(keyId, publicKey, limits, store, expiration);
+    const tx = await this.signerManager.addSecp256r1(
+      keyId,
+      publicKey,
+      limits,
+      store,
+      expiration
+    );
+
+    // Persist the keyId → wallet mapping so a later connectWallet(keyId) resolves
+    // this wallet from trusted storage instead of derivation (derive(keyId) of a
+    // secondary passkey is a squattable address). Without this record a pure-SDK
+    // consumer has nothing but derivation to fall back on for a second signer.
+    // ponytail: optimistic — written at build time, before the caller submits.
+    // If the add tx never lands the keyId is not a signer anywhere, so the F7
+    // ownership check in connectWallet rejects the stale hint rather than
+    // mis-binding. Requires a connected wallet (add_signer is wallet-authorized).
+    const contractId = this.contractId;
+    if (contractId) {
+      await this.credentialManager.rememberPasskey({
+        keyId: keyId instanceof Uint8Array ? base64url(Buffer.from(keyId)) : keyId,
+        publicKey:
+          publicKey instanceof Uint8Array
+            ? publicKey
+            : base64url.toBuffer(publicKey),
+        contractId,
+        createdAt: Date.now(),
+      });
+    }
+
+    return tx;
   }
   /**
    * Update a passkey signer's limits/storage/expiration. The public key is

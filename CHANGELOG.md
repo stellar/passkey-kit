@@ -21,6 +21,18 @@ All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry cover
   `deploySource`, and the shared deployer is rejected. Do not rotate
   `deploySource` to fund restores: it is part of deterministic address
   derivation, so changing it changes every derived wallet address.
+- **`connectWallet` resolution is now trusted-state-first.** Address resolution
+  is local storage → injected indexer → deterministic derivation (previously
+  derivation first). Derivation is only correct for a wallet's first credential
+  and is the one path a squatted contract at `derive(keyId)` can hijack, so it is
+  now a last-resort hint behind a stored or indexed association. The live-signer
+  ownership check is unchanged, so a stale hint still cannot mis-bind. This
+  closes an address-substitution vector for returning users with a secondary
+  passkey; see `docs/security-deterministic-deployer.md`.
+- **`addSecp256r1` persists the keyId → wallet association.** Adding a secondary
+  passkey now records it through the configured `storage` adapter (previously
+  only `createWallet` did), so a later `connectWallet` with that keyId resolves
+  storage-first instead of falling through to derivation.
 
 ## 0.14.0 — 2026-07-14
 

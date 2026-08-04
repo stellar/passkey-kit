@@ -1,9 +1,14 @@
 /**
  * `connectWallet` resolution + verification behavior:
  *
- * - A transport error on the derived-address instance read PROPAGATES —
- *   it must never be misread as not-found and fall through to the
- *   storage/indexer resolution.
+ * - Address resolution is trusted-state-first: local storage, then the injected
+ *   indexer, then deterministic derivation LAST. Derivation is only correct for
+ *   a wallet's first credential and is the one path a squatted contract at the
+ *   derived address can hijack, so it must never win over a stored/indexed
+ *   association.
+ * - A transport error on the derived-address instance read PROPAGATES — it must
+ *   never be misread as not-found (derivation is reached only when storage and
+ *   the indexer both miss).
  * - A failed opt-in `verifyWasmHash` leaves the kit disconnected, so a
  *   subsequent `sign` cannot operate on the rejected contract.
  */
@@ -13,6 +18,8 @@ import { Keypair, Networks, xdr } from "@stellar/stellar-sdk";
 import type { Spec as ContractSpec } from "@stellar/stellar-sdk/contract";
 import { Client as PasskeyClient, type SignerVal } from "passkey-kit-sdk";
 import { PasskeyKit } from "./kit.js";
+import { SignerStore } from "./types.js";
+import { MemoryStorage } from "./storage/memory.js";
 import { WalletOwnershipError } from "./errors.js";
 import { SIGNER_VAL_UDT } from "./kit/auth-payload.js";
 import base64url from "./base64url.js";
@@ -21,12 +28,14 @@ const WASM_HASH = "ab".repeat(32);
 const KEY_ID = Buffer.alloc(16, 7);
 const KEY_ID_B64 = base64url.encode(KEY_ID);
 const INDEXED_WALLET = "CC2R2H3DTXS7OCNV3FTNPAZYIRCY2L2OTBG5FZWJV63HXQ35WB2T2NWJ";
+const STORED_WALLET = "CDXICVKLHPPAZ3EM65OESOGBSQE4YQGFN6JK7ICPYUXDAQPAVXBZ4PAT";
 
-function makeKit(): PasskeyKit {
+function makeKit(storage?: MemoryStorage): PasskeyKit {
   return new PasskeyKit({
     rpcUrl: "https://rpc.example",
     networkPassphrase: Networks.TESTNET,
     walletWasmHash: WASM_HASH,
+    storage,
     WebAuthn: {
       startRegistration: vi.fn(),
       startAuthentication: vi.fn(),
@@ -125,28 +134,37 @@ describe("connectWallet address resolution", () => {
     kit = makeKit();
   });
 
-  it("propagates a transport error on the derivation read — no indexer fallthrough", async () => {
-    vi.spyOn(kit.rpc, "getLedgerEntries").mockRejectedValue(
-      new Error("429 too many requests")
-    );
+  it("prefers stored state over a squattable derived address — no derivation probe", async () => {
+    // The security fix: a stored association wins outright, so a secondary
+    // passkey never resolves to derive(keyId) even if an attacker squatted code
+    // there. `getLedgerEntries` is only the ownership check on the stored wallet.
+    const storage = new MemoryStorage();
+    await storage.save({
+      keyId: KEY_ID_B64,
+      publicKey: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
+      contractId: STORED_WALLET,
+      createdAt: 0,
+    });
+    const kitS = makeKit(storage);
+    const getLedgerEntries = vi
+      .spyOn(kitS.rpc, "getLedgerEntries")
+      // ownership check on the stored wallet (temporary durability): found
+      .mockResolvedValueOnce({ entries: [signerEntry()] } as never);
     const getContractId = vi.fn(async () => INDEXED_WALLET);
 
-    await expect(
-      kit.connectWallet({ keyId: KEY_ID_B64, getContractId })
-    ).rejects.toThrow("429");
+    const result = await kitS.connectWallet({ keyId: KEY_ID_B64, getContractId });
 
-    // The canonical derivation was never abandoned for untrusted sources.
+    expect(result.contractId).toBe(STORED_WALLET);
+    expect(kitS.contractId).toBe(STORED_WALLET);
+    // Neither the indexer nor the derived-address instance probe was consulted.
     expect(getContractId).not.toHaveBeenCalled();
-    expect(kit.wallet).toBeUndefined();
-    expect(kit.keyId).toBeUndefined();
+    expect(getLedgerEntries).toHaveBeenCalledTimes(1);
   });
 
-  it("falls through to the indexer only on an authoritative not-found", async () => {
+  it("uses the indexer when storage misses — derivation is not consulted", async () => {
     const getLedgerEntries = vi
       .spyOn(kit.rpc, "getLedgerEntries")
-      // 1) derived-address instance probe: genuine not-found
-      .mockResolvedValueOnce({ entries: [] } as never)
-      // 2) ownership check on the indexer-resolved wallet (temporary durability)
+      // ownership check on the indexer-resolved wallet (temporary durability)
       .mockResolvedValueOnce({ entries: [signerEntry()] } as never);
     const getContractId = vi.fn(async () => INDEXED_WALLET);
 
@@ -155,23 +173,41 @@ describe("connectWallet address resolution", () => {
     expect(getContractId).toHaveBeenCalledWith(KEY_ID_B64);
     expect(result.contractId).toBe(INDEXED_WALLET);
     expect(kit.contractId).toBe(INDEXED_WALLET);
-    expect(getLedgerEntries).toHaveBeenCalledTimes(2);
+    // Only the ownership read ran — no derived-address instance probe.
+    expect(getLedgerEntries).toHaveBeenCalledTimes(1);
   });
 
-  it("connects via the deterministic derivation when the instance exists", async () => {
+  it("falls back to deterministic derivation only when storage AND indexer miss", async () => {
     vi.spyOn(kit.rpc, "getLedgerEntries")
       // 1) derived-address instance probe: found
       .mockResolvedValueOnce({ entries: [instanceEntry()] } as never)
       // 2) ownership check (temporary durability): found
       .mockResolvedValueOnce({ entries: [signerEntry()] } as never);
-    const getContractId = vi.fn(async () => INDEXED_WALLET);
+    const getContractId = vi.fn(async () => undefined);
 
     const result = await kit.connectWallet({ keyId: KEY_ID_B64, getContractId });
 
-    expect(getContractId).not.toHaveBeenCalled();
-    // The derived address, not the indexer answer.
+    // The indexer was tried first and missed, so derivation resolved it.
+    expect(getContractId).toHaveBeenCalledWith(KEY_ID_B64);
     expect(result.contractId).not.toBe(INDEXED_WALLET);
     expect(result.contractId).toMatch(/^C/);
+  });
+
+  it("propagates a transport error on the derivation read — no not-found misread", async () => {
+    // Reached only after storage + indexer miss; a 429 there must not be treated
+    // as an authoritative not-found.
+    vi.spyOn(kit.rpc, "getLedgerEntries").mockRejectedValue(
+      new Error("429 too many requests")
+    );
+    const getContractId = vi.fn(async () => undefined);
+
+    await expect(
+      kit.connectWallet({ keyId: KEY_ID_B64, getContractId })
+    ).rejects.toThrow("429");
+
+    expect(getContractId).toHaveBeenCalledWith(KEY_ID_B64);
+    expect(kit.wallet).toBeUndefined();
+    expect(kit.keyId).toBeUndefined();
   });
 
   it("disconnects on an ownership mismatch (keyId not a signer)", async () => {
@@ -185,6 +221,55 @@ describe("connectWallet address resolution", () => {
     ).rejects.toBeInstanceOf(WalletOwnershipError);
     expect(kit.wallet).toBeUndefined();
     expect(kit.keyId).toBeUndefined();
+  });
+});
+
+describe("addSecp256r1 persistence", () => {
+  const NEW_KEY_ID = base64url.encode(Buffer.alloc(16, 9));
+  const NEW_PUBKEY = Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xa9)]);
+
+  it("records the new keyId → connected-wallet mapping so a later connect is storage-first", async () => {
+    const storage = new MemoryStorage();
+    const kit = makeKit(storage);
+    // Pretend a wallet is connected (add_signer is wallet-authorized).
+    kit.wallet = { options: { contractId: STORED_WALLET } } as never;
+    // Stub the build so no real tx is assembled.
+    vi.spyOn(
+      (kit as unknown as { signerManager: { addSecp256r1: unknown } })
+        .signerManager as never,
+      "addSecp256r1"
+    ).mockResolvedValue("AT_ADD" as never);
+
+    const tx = await kit.addSecp256r1(
+      NEW_KEY_ID,
+      NEW_PUBKEY,
+      undefined as never,
+      SignerStore.Persistent
+    );
+
+    expect(tx).toBe("AT_ADD");
+    const stored = await storage.get(NEW_KEY_ID);
+    expect(stored?.contractId).toBe(STORED_WALLET);
+    expect(Buffer.from(stored!.publicKey)).toEqual(NEW_PUBKEY);
+  });
+
+  it("does not persist when no wallet is connected", async () => {
+    const storage = new MemoryStorage();
+    const kit = makeKit(storage);
+    vi.spyOn(
+      (kit as unknown as { signerManager: { addSecp256r1: unknown } })
+        .signerManager as never,
+      "addSecp256r1"
+    ).mockResolvedValue("AT_ADD" as never);
+
+    await kit.addSecp256r1(
+      NEW_KEY_ID,
+      NEW_PUBKEY,
+      undefined as never,
+      SignerStore.Persistent
+    );
+
+    expect(await storage.get(NEW_KEY_ID)).toBeNull();
   });
 });
 
