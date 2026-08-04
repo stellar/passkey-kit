@@ -84,23 +84,19 @@ This is an accepted, documented residual:
 - A normal WebAuthn registration does not publish its credential ID before the
   client deploys, and a new registration creates a fresh credential.
 - **Across networks, that last point does not hold.** Deploying a wallet
-  publishes its `keyId`: it is stored on-chain in the signer entry, and the
-  hosted indexer resolves it (`GET /api/lookup/:credentialId`). The network
-  passphrase is part of the address preimage but the `keyId` is not
-  network-scoped, so the same passkey maps to a different, not-yet-deployed
-  address on every other network. Anyone can therefore read a testnet wallet's
-  `keyId` and occupy the matching mainnet address — no race, no leak, no access
-  to the user. Register a fresh credential per network rather than reusing a
-  passkey that already has a wallet deployed on another one.
+  publishes its `keyId`, and the `keyId` is not network-scoped even though the
+  network passphrase is part of the address preimage. A passkey that already has
+  a wallet on one network therefore maps to an address on every other network
+  that its owner does not hold.
+  **Register a fresh credential per network; never reuse a passkey that already
+  has a wallet deployed on another one.**
 - **Same-network, the "before deployment" framing also fails for secondary
   credentials.** Only a wallet's FIRST credential salts its deploy, so
-  `derive(keyId_1)` is the wallet itself. Every later signer added via
-  `add_signer` publishes its `keyId` on-chain (a `signer_added` topic; the
-  hosted indexer re-serves it), yet `derive(keyId_2)` is a distinct address that
-  is never legitimately deployed. It is therefore squattable indefinitely — no
-  race, no leak, no delayed/failed deployment required. A single-passkey wallet's
-  only same-network window is the narrower leaked/reused-ID or delayed-deployment
-  case; a multi-passkey wallet has a permanently open one per secondary key.
+  `derive(keyId_1)` is the wallet itself. A later signer's `keyId` is also
+  published, but `derive(keyId_2)` is a distinct address that is never
+  legitimately deployed, so it does not have the narrow exposure window a first
+  credential does. Treat any derivation from a secondary credential as
+  unauthenticated.
 - The impact is griefing or value sent to the wrong precomputed address, not
   control of a correctly deployed wallet — the deployer is never a wallet signer.
   The one SDK-level consequence was that `connectWallet` resolved a secondary
@@ -108,30 +104,26 @@ This is an accepted, documented residual:
   correct wallet; resolution is now trusted-state-first (storage → indexer →
   derivation) with a live-signer ownership check, so a squat no longer misbinds
   a returning user. A first connect on a fresh device with no local record still
-  falls through to the indexer, whose reverse lookup is existence-only. That path
-  stays open: as described below, no client-side check closes it, so a
-  derivation-resolved address is unauthenticated by construction.
+  falls through to the indexer and then to derivation; since `0.16.0` both bind
+  accepted code identity before any signer state is read. A derivation-resolved
+  address remains unauthenticated by construction — see below.
 
 A signer-presence check **alone is not a mitigation**. Arbitrary code at a
 squatted address can implement `get_signer`, `list`, or an equivalent getter and
-return whatever signer set the client expects. passkey-kit's
-`verifyWasmHash: true` check can bind code identity when callers opt into it;
-without that independent binding, a successful signer getter is not proof.
+return whatever signer set the client expects, so a successful signer getter is
+not proof of anything without an independent binding on the code that answered
+it. Since `0.16.0` the SDK binds accepted code identity first — see below.
 
-**Binding code identity does not close it either, and the two checks together do
-not authenticate a derived address.** A code-identity check proves the contract
-runs expected code; it says nothing about who the signers are, because the
-address preimage binds neither the WASM hash nor the constructor arguments. A
-wallet can be brought into a state where accepted code is running *and* the
-victim's credential is a genuine signer *and* an attacker retains authority —
-the victim's key material is public, and adding a signer is an ordinary
-authorized operation for whoever already controls the wallet. Such a contract
-passes both checks.
+**Code identity and signer state together still do not authenticate a derived
+address.** A code-identity check proves the contract runs expected code; it says
+nothing about who the signers are, because the address preimage binds neither the
+WASM hash nor the constructor arguments. Accepted code and a genuine signer entry
+for the expected credential can coexist with authority held elsewhere.
 
-What these checks have in common is that they read **current state**, and current
-state at a squatted address is chosen by the squatter. Signer/policy equality
-against trusted local state would exclude it, but a fresh device — the scenario
-derivation exists to serve — has no such state.
+What both checks have in common is that they read **current state**, and current
+state at a squatted address is chosen by whoever put code there. Signer/policy
+equality against trusted local state would exclude it, but a fresh device — the
+scenario derivation exists to serve — has no such state.
 
 Until the provenance check described below ships, treat a derivation-resolved
 address as **unauthenticated**: do not present it as a deposit address. Today
@@ -251,7 +243,7 @@ Operational verification of the mainnet geometry below is scripted — see
 | Current smart-account-kit | `sha256("openzeppelin-smart-account-kit")` seed | `GAAH4OT36RRCCAGKARGPN2HLHT2NOBVFHO4GUHA6CF7UKQ4MMV24WQ4N` | Shared sign-only identity; do not fund or rotate. |
 | Current passkey-kit | `sha256("kalepail")` seed | `GC2C7AWLS2FMFTQAHW3IBUB4ZXVP4E37XNLEF2IK7IVXBB6CMEPCSXFO` | Shared sign-only identity; do not fund or rotate. |
 | Legacy passkey-kit mainnet, before `23597d8` | `sha256(mainnet network passphrase)` seed | `GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7` | Locked: master weight `0`; cannot sign. |
-| Legacy passkey-kit testnet, before `23597d8` | `sha256(testnet network passphrase)` seed | `GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H` | Still live: thresholds `0/0/0`, master weight `1`, holding about 13,067 XLM plus TUSDC. Harden or retire this testnet account. |
+| Legacy passkey-kit testnet, before `23597d8` | `sha256(testnet network passphrase)` seed | *(withheld — see internal ops tracker)* | Superseded, unhardened, testnet only. Tracked for retirement. |
 
 Changing a deployer changes the address preimage for every wallet derived from
 it. Keep legacy identities in discovery/migration logic; use `restoreSource` for
@@ -266,5 +258,5 @@ reduce operational risk on testnet.
   fail closed, so a network reset cannot recreate an unhardened `AccountEntry`
   that address authorization then depends on. The relayer proxy already refuses
   to Friendbot-fund a shared deployer.
-- Sweep or retire the legacy testnet deployer listed above — its key is publicly
-  derivable, so anyone can move its balance today.
+- Sweep or retire the superseded testnet deployer listed above. Like every shared
+  deployer its key is publicly derivable, so it must not hold a balance.
