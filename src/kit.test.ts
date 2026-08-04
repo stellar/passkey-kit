@@ -30,12 +30,16 @@ const KEY_ID_B64 = base64url.encode(KEY_ID);
 const INDEXED_WALLET = "CC2R2H3DTXS7OCNV3FTNPAZYIRCY2L2OTBG5FZWJV63HXQ35WB2T2NWJ";
 const STORED_WALLET = "CDXICVKLHPPAZ3EM65OESOGBSQE4YQGFN6JK7ICPYUXDAQPAVXBZ4PAT";
 
-function makeKit(storage?: MemoryStorage): PasskeyKit {
+function makeKit(
+  storage?: MemoryStorage,
+  overrides?: { acceptedWasmHashes?: string[] }
+): PasskeyKit {
   return new PasskeyKit({
     rpcUrl: "https://rpc.example",
     networkPassphrase: Networks.TESTNET,
     walletWasmHash: WASM_HASH,
     storage,
+    ...overrides,
     WebAuthn: {
       startRegistration: vi.fn(),
       startAuthentication: vi.fn(),
@@ -132,6 +136,12 @@ describe("connectWallet address resolution", () => {
 
   beforeEach(() => {
     kit = makeKit();
+    // Untrusted resolution (indexer/derivation) now binds code identity before
+    // reading signer state, so these paths perform an instance read. Accepted
+    // code by default; the rejection cases live in their own describe below.
+    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
+      instanceWithWasm(WASM_HASH) as never
+    );
   });
 
   it("prefers stored state over a squattable derived address — no derivation probe", async () => {
@@ -270,6 +280,94 @@ describe("addSecp256r1 persistence", () => {
     );
 
     expect(await storage.get(NEW_KEY_ID)).toBeNull();
+  });
+});
+
+describe("connectWallet code identity (default-on for untrusted resolution)", () => {
+  it("REJECTS an indexer row running unaccepted code, with no opt-in", async () => {
+    // The reverse lookup is a claim by an untrusted party: any contract can emit
+    // the signer events an indexer keys on AND write the signer ledger entry we
+    // read back, so signer state alone proves nothing. Binding accepted code is
+    // what makes that state meaningful. No flag is passed here on purpose.
+    const kit = makeKit();
+    const getLedgerEntries = vi
+      .spyOn(kit.rpc, "getLedgerEntries")
+      .mockResolvedValue({ entries: [signerEntry()] } as never);
+    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
+      instanceWithWasm("cd".repeat(32)) as never // not the accepted hash
+    );
+
+    await expect(
+      kit.connectWallet({
+        keyId: KEY_ID_B64,
+        getContractId: async () => INDEXED_WALLET,
+      })
+    ).rejects.toBeInstanceOf(WalletOwnershipError);
+
+    expect(kit.wallet).toBeUndefined();
+    expect(kit.keyId).toBeUndefined();
+    // Code identity is bound BEFORE any signer read — a forged signer entry on
+    // attacker-authored code must never be consulted at all.
+    expect(getLedgerEntries).not.toHaveBeenCalled();
+  });
+
+  it("does NOT check a storage-resolved address, so an upgraded wallet still opens", async () => {
+    const storage = new MemoryStorage();
+    await storage.save({
+      keyId: KEY_ID_B64,
+      publicKey: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
+      contractId: STORED_WALLET,
+      createdAt: 0,
+    });
+    const kitS = makeKit(storage);
+    vi.spyOn(kitS.rpc, "getLedgerEntries").mockResolvedValueOnce({
+      entries: [signerEntry()],
+    } as never);
+    const getContractData = vi
+      .spyOn(kitS.rpc, "getContractData")
+      .mockResolvedValue(instanceWithWasm("cd".repeat(32)) as never);
+
+    const result = await kitS.connectWallet({ keyId: KEY_ID_B64 });
+
+    expect(result.contractId).toBe(STORED_WALLET);
+    expect(getContractData).not.toHaveBeenCalled();
+  });
+
+  it("accepts any hash on the allowlist, not just the deploy hash", async () => {
+    const UPGRADED = "ef".repeat(32);
+    const kit = makeKit(undefined, { acceptedWasmHashes: [WASM_HASH, UPGRADED] });
+    vi.spyOn(kit.rpc, "getLedgerEntries").mockResolvedValue({
+      entries: [signerEntry()],
+    } as never);
+    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
+      instanceWithWasm(UPGRADED) as never
+    );
+
+    const result = await kit.connectWallet({
+      keyId: KEY_ID_B64,
+      getContractId: async () => INDEXED_WALLET,
+    });
+
+    expect(result.contractId).toBe(INDEXED_WALLET);
+  });
+
+  it("lets a caller opt out explicitly", async () => {
+    const kit = makeKit();
+    vi.spyOn(kit.rpc, "getLedgerEntries").mockResolvedValue({
+      entries: [signerEntry()],
+    } as never);
+    const getContractData = vi
+      .spyOn(kit.rpc, "getContractData")
+      .mockResolvedValue(instanceWithWasm("cd".repeat(32)) as never);
+
+    const result = await kit.connectWallet({
+      keyId: KEY_ID_B64,
+      getContractId: async () => INDEXED_WALLET,
+      verifyWasmHash: false,
+    });
+
+    expect(result.contractId).toBe(INDEXED_WALLET);
+    expect(getContractData).not.toHaveBeenCalled();
   });
 });
 

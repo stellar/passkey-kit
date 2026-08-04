@@ -289,14 +289,21 @@ export class MercuryIndexer implements SignerIndexer {
 
     const confirmed: string[] = [];
     for (const candidate of candidates) {
-      if (candidate === derived) {
-        confirmed.push(candidate);
-        continue;
-      }
       if (rpc) {
+        // Always prefer the on-chain read, including for the derived address.
+        // Matching derivation is not confirmation: `derive(keyId)` is exactly
+        // the address an attacker can squat, so accepting it unread would
+        // "confirm" the one candidate we have the least reason to trust.
+        // This does not defeat a squat running genuine code with the victim
+        // installed as a signer — nothing checked here can — it only stops
+        // unread rows being handed back as confirmed.
         const signer = await getSigner({ rpc, spec: walletSpec() }, candidate, key);
         if (signer) confirmed.push(candidate);
+        continue;
       }
+      // No rpc: derivation is the only available corroboration (fail-closed
+      // above guarantees one of the two exists).
+      if (candidate === derived) confirmed.push(candidate);
     }
     return confirmed;
   }

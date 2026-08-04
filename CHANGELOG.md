@@ -2,6 +2,39 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.16.0 — 2026-08-04
+
+- **Changed: `verifyWasmHash` is now on by default for untrusted resolution, and
+  checks an allowlist.** `connectWallet` binds the resolved wallet's code identity
+  against the new `acceptedWasmHashes` option — defaulting to `[walletWasmHash]`,
+  so the common case needs no configuration — whenever the address came from an
+  indexer lookup or address derivation. An address resolved from trusted local
+  storage is not checked, so returning users with legitimately upgraded wallets
+  are unaffected.
+
+  The check now runs **before** the live-signer ownership check rather than after
+  it. A signer entry only means "this passkey was authorized onto this wallet" if
+  the code that wrote it enforced authorization; under arbitrary code it means
+  nothing. An address from a reverse lookup or derivation is a claim by an
+  untrusted party — contract-emitted events are unprivileged and a contract
+  controls its own storage — so accepted code is what makes the signer read
+  meaningful. Previously `verifyWasmHash` defaulted to `false`.
+
+  **Breaking for one case:** connecting from an untrusted path to a wallet running
+  code that is not on the allowlist now throws `WalletOwnershipError` instead of
+  succeeding. List the hashes of legitimately upgraded wallets in
+  `acceptedWasmHashes`, or pass `verifyWasmHash: false` to opt out per call.
+
+  `acceptedWasmHashes` is a list rather than a single value because an upgraded
+  wallet legitimately runs different code.
+
+  See [`docs/security-deterministic-deployer.md`](./docs/security-deterministic-deployer.md).
+
+- **Changed: `MercuryIndexer.confirmCandidates` no longer treats a derived address
+  as self-confirming.** With `rpc` configured every candidate is now read
+  on-chain, including the derived one; derivation is used as corroboration only
+  when no RPC is available.
+
 ## 0.15.0 — 2026-08-03
 
 - **Breaking: shared-deployer wallet creation is relayer-only.** The default

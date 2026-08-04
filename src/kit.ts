@@ -63,6 +63,22 @@ export interface PasskeyKitConfig {
   networkPassphrase: string;
   /** Smart-wallet WASM hash (hex) used to deploy new wallets. */
   walletWasmHash: string;
+  /**
+   * Code identities (hex WASM hashes) accepted when connecting to a wallet whose
+   * address came from an untrusted source — an indexer lookup or address
+   * derivation. Defaults to `[walletWasmHash]`.
+   *
+   * Binding code identity is what makes a wallet's signer state meaningful: under
+   * accepted code, a signer entry can only have been produced by logic that
+   * required wallet authorization. Arbitrary code can write whatever signer entry
+   * a client expects, so without this check a reverse lookup proves nothing.
+   *
+   * This is a list rather than a single value because a legitimately upgraded
+   * wallet runs different code. Add each accepted hash as you roll upgrades out;
+   * a wallet running code that is not listed will not connect from an untrusted
+   * path. See `docs/security-deterministic-deployer.md`.
+   */
+  acceptedWasmHashes?: string[];
   /** WebAuthn Relying Party id (domain); defaults to the current origin. */
   rpId?: string;
   /**
@@ -93,8 +109,16 @@ export interface ConnectOptions {
   /** Indexer-backed keyId → contract lookup, used when derivation misses. */
   getContractId?: (keyId: string) => Promise<string | undefined>;
   /**
-   * Also assert the wallet's on-chain WASM hash equals `walletWasmHash`.
-   * Off by default: an upgraded wallet legitimately runs a different hash.
+   * Override the code-identity check against {@link PasskeyKitConfig.acceptedWasmHashes}.
+   *
+   * Defaults to ON whenever the address was resolved from an untrusted source
+   * (indexer lookup or derivation) and OFF when it came from trusted local
+   * storage, where a legitimately upgraded wallet would otherwise be locked out.
+   *
+   * Set `true` to check even a storage-resolved address; set `false` to skip the
+   * check entirely. Disabling it means a reverse lookup can resolve to a contract
+   * that merely claims this credential — only do so if you bind code identity
+   * yourself.
    */
   verifyWasmHash?: boolean;
 }
@@ -104,6 +128,8 @@ export class PasskeyKit {
   readonly rpcUrl: string;
   readonly networkPassphrase: string;
   readonly walletWasmHash: string;
+  /** Accepted code identities, lowercase hex. Never empty. */
+  readonly acceptedWasmHashes: readonly string[];
   readonly rpId?: string;
 
   /** Lifecycle event emitter (walletCreated, walletConnected, …). */
@@ -145,6 +171,13 @@ export class PasskeyKit {
     this.rpcUrl = config.rpcUrl;
     this.networkPassphrase = config.networkPassphrase;
     this.walletWasmHash = config.walletWasmHash;
+    // Seeded from the deploy hash so the common case is zero-config; an empty
+    // array would silently accept nothing, so treat it as "not supplied".
+    this.acceptedWasmHashes = (
+      config.acceptedWasmHashes?.length
+        ? config.acceptedWasmHashes
+        : [config.walletWasmHash]
+    ).map((h) => h.toLowerCase());
     this.rpId = config.rpId;
     this.timeoutInSeconds = config.timeoutInSeconds ?? DEFAULT_TIMEOUT_SECONDS;
     this.webAuthn =
@@ -308,11 +341,16 @@ export class PasskeyKit {
     //   1) local storage, 2) injected indexer lookup, 3) derivation.
     // The keyId is still verified as a live signer below (F7), so a stale hint
     // can never connect to a wallet the passkey does not actually control.
-    let contractId: string | undefined =
-      (await this.credentialManager.lookupContractId(keyIdBase64)) ??
-      (options?.getContractId
-        ? await options.getContractId(keyIdBase64)
-        : undefined);
+    let contractId = await this.credentialManager.lookupContractId(keyIdBase64);
+    // Whether the address came from trusted local state. An indexer row or a
+    // derived address is a CLAIM by an untrusted party: any contract can emit
+    // the signer events an indexer keys on, and any contract can write the
+    // signer ledger entry we read back. Both are checked against accepted code
+    // identity below; trusted state is not, so an upgraded wallet still opens.
+    const fromTrustedState = contractId !== undefined;
+    if (!contractId && options?.getContractId) {
+      contractId = await options.getContractId(keyIdBase64);
+    }
     if (!contractId) {
       // Transport errors (429/5xx/timeout) propagate — only an authoritative
       // not-found leaves the derived address unresolved.
@@ -337,7 +375,21 @@ export class PasskeyKit {
     });
     this.keyId = keyIdBase64;
 
-    // 3) Ownership verification (F7): the keyId must be a live signer.
+    // 3) Code identity FIRST, then signer state — the ordering matters. A signer
+    // entry only means "this passkey was authorized onto this wallet" if the code
+    // that wrote it enforced authorization; under arbitrary code it means nothing.
+    // So bind accepted code before reading any signer state from the contract.
+    if (options?.verifyWasmHash ?? !fromTrustedState) {
+      try {
+        await this.assertWalletWasmHash(contractId);
+      } catch (err) {
+        this.wallet = undefined;
+        this.keyId = undefined;
+        throw err;
+      }
+    }
+
+    // 4) Ownership verification (F7): the keyId must be a live signer.
     // A thrown error here is a transport failure, not proof of non-ownership —
     // surface it as-is (a valid passkey must not read as an ownership mismatch
     // because the RPC hiccuped); only a definitive not-found (`null`) does.
@@ -358,19 +410,6 @@ export class PasskeyKit {
         "The passkey is not a signer on the resolved wallet",
         { contractId, keyId: keyIdBase64 }
       );
-    }
-
-    // 4) Optional wasm-hash check (opt-in; upgraded wallets differ by design).
-    // A failed check must leave the kit disconnected — otherwise a subsequent
-    // sign() would operate on the contract the caller just rejected.
-    if (options?.verifyWasmHash) {
-      try {
-        await this.assertWalletWasmHash(contractId);
-      } catch (err) {
-        this.wallet = undefined;
-        this.keyId = undefined;
-        throw err;
-      }
     }
 
     this.events.emit("walletConnected", { contractId, keyId: keyIdBase64 });
@@ -394,10 +433,10 @@ export class PasskeyKit {
       });
     }
     const wasmHash = executable.wasmHash().toString("hex");
-    if (wasmHash !== this.walletWasmHash.toLowerCase()) {
-      throw new WalletOwnershipError("Wallet WASM hash does not match", {
+    if (!this.acceptedWasmHashes.includes(wasmHash)) {
+      throw new WalletOwnershipError("Wallet code identity is not accepted", {
         contractId,
-        expected: this.walletWasmHash,
+        accepted: this.acceptedWasmHashes,
         actual: wasmHash,
       });
     }

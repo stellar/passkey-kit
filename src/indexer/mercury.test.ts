@@ -279,6 +279,36 @@ describe("MercuryIndexer.findWallets", () => {
     expect(mock).toHaveBeenCalledTimes(1);
   });
 
+  it("rpc-confirms the DERIVED candidate instead of trusting the match", async () => {
+    // derive(keyId) is the address an attacker can squat, so matching derivation
+    // is not confirmation. With rpc available it must still be read on-chain,
+    // and dropped when the signer entry is absent.
+    const keyId = base64url.encode(Buffer.alloc(16, 9));
+    const derived = deriveContractAddress(
+      base64url.toBuffer(keyId),
+      DEPLOYER,
+      TESTNET
+    );
+    stubFetch(() => ({
+      body: {
+        credentialId: base64url.toBuffer(keyId).toString("hex"),
+        wallets: [{ contract_id: derived, generation: "v1", signer_count: 1 }],
+        count: 1,
+      },
+    }));
+
+    const getLedgerEntries = vi.fn(async () => ({ entries: [] })); // absent
+    const indexer = new MercuryIndexer({
+      url: BASE,
+      rpc: fakeRpc(getLedgerEntries),
+      hardening: { networkPassphrase: TESTNET, deployerPublicKey: DEPLOYER },
+    });
+
+    const wallets = await indexer.findWallets(SignerKey.Secp256r1(keyId));
+    expect(wallets).toEqual([]);
+    expect(getLedgerEntries).toHaveBeenCalled();
+  });
+
   it("looks up an Ed25519 key by its strkey address, confirmed on-chain", async () => {
     const mock = stubFetch((url) => {
       expect(url).toContain(`/api/lookup/address/${ED25519}`);

@@ -147,6 +147,7 @@ Browser-side facade for wallet lifecycle and signing. Holds no secrets.
 | `rpcUrl` | `string` | Yes | Stellar RPC URL. |
 | `networkPassphrase` | `string` | Yes | Network passphrase. |
 | `walletWasmHash` | `string` (hex) | Yes | Smart-wallet WASM hash used to deploy new wallets. |
+| `acceptedWasmHashes` | `string[]` (hex) | No | Code identities accepted when connecting to a wallet resolved from an untrusted source (indexer lookup or derivation). Defaults to `[walletWasmHash]`. Add each hash as upgrades roll out — see [security notes](./docs/security-deterministic-deployer.md). |
 | `rpId` | `string` | No | WebAuthn Relying Party id (domain). Defaults to the current origin. |
 | `deploySource` | `string` (`S…`) | No | Secret key for a deployer you control, which then sources and pays for its own deployments. Defaults to the canonical deterministic deployer, which is sign-only and never pays. **Overriding it changes derived wallet addresses** (see [Deterministic derivation](#deterministic-derivation)). |
 | `timeoutInSeconds` | `number` | No | Transaction time bound (default `30`; the relayer requires `<= 30`). |
@@ -182,7 +183,7 @@ Browser-side facade for wallet lifecycle and signing. Holds no secrets.
 |---|---|---|
 | `keyId` | `string \| Uint8Array` | Connect a specific credential, skipping the discovery ceremony. |
 | `getContractId` | `(keyId: string) => Promise<string \| undefined>` | Indexer-backed keyId → wallet lookup, tried after local storage and before deterministic derivation. |
-| `verifyWasmHash` | `boolean` | Also assert the wallet's on-chain WASM hash equals `walletWasmHash`. Off by default (an upgraded wallet legitimately runs a different hash). |
+| `verifyWasmHash` | `boolean` | Override the code-identity check against `acceptedWasmHashes`. Defaults to **on** for an address resolved from an untrusted source (indexer or derivation) and **off** for one from trusted local storage, where an upgraded wallet would otherwise be locked out. `true` checks even a stored address; `false` skips the check entirely. |
 
 ### Signing methods
 
