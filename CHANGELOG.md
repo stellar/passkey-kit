@@ -2,6 +2,28 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.16.1 — 2026-08-04
+
+- **Fixed: `sac-sdk` forced a second, outdated copy of `@stellar/stellar-sdk`
+  into consumer installs.** The published `sac-sdk@0.4.3` manifest carried
+  `@stellar/stellar-sdk: "16.0.0-rc.1"` as a hard **dependency** — an exact
+  release-candidate pin. Because it was exact it could not dedupe against the
+  `>=16.0.0` range every other package here uses, so `npm i passkey-kit` resolved
+  a private nested SDK copy on an older `axios`, and reported 4 advisories
+  (3 moderate, 1 high) that no consumer could resolve themselves.
+
+  The package source in this repo was already correct — `buffer` as the only
+  dependency and the SDK demoted to a `>=16.0.0` peer — so the published artifact
+  had simply fallen behind it. Republished as `sac-sdk@0.4.4`; this release
+  repoints `passkey-kit` at it.
+
+  A clean production install now dedupes to a single `@stellar/stellar-sdk` and
+  audits clean. No API change, no code change: `passkey-kit`'s own sources are
+  identical to `0.16.0`.
+
+  Unaffected: `passkey-kit-sdk` and the sibling `smart-account-kit-bindings` were
+  both published correctly peer-demoted.
+
 ## 0.16.0 — 2026-08-04
 
 - **Changed: `verifyWasmHash` is now on by default for untrusted resolution, and
