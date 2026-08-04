@@ -119,6 +119,10 @@ without that independent binding, a successful signer getter is not proof. Any
 future default mitigation must first bind the accepted WASM/code identity, then
 validate signer and policy state against that trusted code.
 
+Operational verification of the mainnet geometry below is scripted — see
+[`mainnet-hardening.md`](./mainnet-hardening.md) and
+`scripts/check-mainnet-deployer.mjs`, which exits non-zero on drift.
+
 ## Deployer inventory
 
 | Generation | Derivation | Address | State / action |
