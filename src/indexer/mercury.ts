@@ -333,9 +333,7 @@ function keyFromJson(k: PasskeyIndexerKeyJson): SignerKey {
     case "secp256r1":
       // The indexer renders the credential id as lowercase hex; the SDK carries
       // it as base64url (matches StoredPasskey.keyId and the contract SignerKey).
-      return SignerKey.Secp256r1(
-        Buffer.from(k.value, "hex").toString("base64url")
-      );
+      return SignerKey.Secp256r1(base64url(Buffer.from(k.value, "hex")));
     case "ed25519":
       return SignerKey.Ed25519(k.value); // already a `G…` strkey
     case "policy":

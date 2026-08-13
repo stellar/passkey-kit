@@ -12,9 +12,9 @@ The versions checked into each `package.json` are authoritative; `npm view` is t
 
 | Package | Checked-in version |
 |---|---|
-| `passkey-kit-sdk` | `0.7.3` |
-| `sac-sdk` | `0.4.3` |
-| `passkey-kit` | `0.13.1` (v1 release + live Mercury discovery — see [CHANGELOG](../CHANGELOG.md)) |
+| `passkey-kit-sdk` | `0.8.0` |
+| `sac-sdk` | `0.4.4` |
+| `passkey-kit` | `0.16.2` (browser signer-discovery fix — see [CHANGELOG](../CHANGELOG.md)) |
 
 > [!IMPORTANT]
 > Publishing is an **outward-facing, user-gated** step. Bump the versions intentionally, and have the person with npm access run the publish commands (they hold the credentials and the OTP device).
