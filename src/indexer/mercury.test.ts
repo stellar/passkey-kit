@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Buffer as BrowserBuffer } from "buffer/index.js";
 import { Keypair, Networks, xdr } from "@stellar/stellar-sdk";
 import base64url from "../base64url.js";
 import { SignerKey } from "../types.js";
@@ -67,6 +68,27 @@ describe("mercuryPasskeyIndexerUrl", () => {
 });
 
 describe("MercuryIndexer.getSigners", () => {
+  it("decodes a Secp256r1 key with the browser Buffer polyfill", async () => {
+    vi.stubGlobal("Buffer", BrowserBuffer);
+    stubFetch(() => ({
+      body: {
+        contractId: WALLET,
+        generation: "v1",
+        signers: [
+          {
+            key: { type: "secp256r1", value: CRED_HEX },
+            storage: "persistent",
+            status: "live",
+          },
+        ],
+      },
+    }));
+
+    const [signer] = await new MercuryIndexer({ url: BASE }).getSigners(WALLET);
+
+    expect(signer!.key.value).toBe("zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMw");
+  });
+
   it("maps decoded JSON rows to WalletSigners", async () => {
     stubFetch(() => ({
       body: {

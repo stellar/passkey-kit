@@ -2,6 +2,16 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.16.2 — 2026-08-13
+
+- **Fixed signer discovery in browsers.** `MercuryIndexer.getSigners()` now
+  converts passkey credential IDs with the portable `base64url` helper. The
+  previous conversion used a Node-only `Buffer` encoding and failed in browsers
+  with `Unknown encoding: base64url`.
+
+  A regression test now runs the public method with the installed browser
+  `Buffer` polyfill. No contract, binding, indexer, or relayer change is needed.
+
 ## 0.16.1 — 2026-08-04
 
 - **Fixed: `sac-sdk` forced a second, outdated copy of `@stellar/stellar-sdk`
