@@ -222,7 +222,7 @@ fn removed_required_policy_revokes_delegate_full_stack() {
 
     let recipient = Address::generate(&env);
     let root_invocation = transfer_invocation(&sac, &wallet, &recipient, amount);
-    let nonce = 73i64;
+    let nonce = i64::from(env.ledger().sequence());
     let payload = auth_payload(&env, nonce, signature_expiration_ledger, &root_invocation);
     let root_auth = SorobanAuthorizationEntry {
         credentials: SorobanCredentials::AddressV2(SorobanAddressCredentials {
