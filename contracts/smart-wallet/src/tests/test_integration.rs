@@ -166,6 +166,87 @@ fn ed25519_with_policy_limits_full_stack() {
     println!("{:?}", env.cost_estimate().budget().print());
 }
 
+/// Removing a required policy signer must immediately revoke every dependent
+/// delegate. The policy contract stays installed, so the old implementation
+/// would still call it and authorize this transfer after deleting its stored
+/// expiration gate.
+#[test]
+fn removed_required_policy_revokes_delegate_full_stack() {
+    let env = test_env();
+    env.ledger().set_timestamp(1_000_000);
+
+    let signature_expiration_ledger = env.ledger().sequence();
+    let amount = 5_000_000i128;
+    let owner = Ed25519Signer::new(71);
+    let delegate = Ed25519Signer::new(72);
+
+    let (wallet, wallet_client) = register_wallet(
+        &env,
+        &owner.signer(
+            &env,
+            SignerExpiration(None),
+            SignerLimits(None),
+            SignerStorage::Persistent,
+        ),
+    );
+    let (sac, sac_admin_client, sac_client) = register_sac(&env);
+    sac_admin_client
+        .mock_all_auths()
+        .mint(&wallet, &100_000_000);
+
+    let policy = env.register(PolicyContract, ());
+    let policy_key = SignerKey::Policy(policy.clone());
+
+    wallet_client.mock_all_auths().add_signer(&delegate.signer(
+        &env,
+        SignerExpiration(None),
+        SignerLimits(Some(map![
+            &env,
+            (
+                sac.clone(),
+                Some(soroban_sdk::vec![&env, policy_key.clone()])
+            ),
+        ])),
+        SignerStorage::Temporary,
+    ));
+    wallet_client.mock_all_auths().add_signer(&Signer::Policy(
+        policy,
+        SignerExpiration(Some(1_000_100)),
+        SignerLimits(None),
+        SignerStorage::Temporary,
+    ));
+
+    // The owner may remove the policy. Dependent delegates must fail closed.
+    wallet_client.mock_all_auths().remove_signer(&policy_key);
+    assert_eq!(wallet_client.get_signer(&policy_key), None);
+
+    let recipient = Address::generate(&env);
+    let root_invocation = transfer_invocation(&sac, &wallet, &recipient, amount);
+    let nonce = 73i64;
+    let payload = auth_payload(&env, nonce, signature_expiration_ledger, &root_invocation);
+    let root_auth = SorobanAuthorizationEntry {
+        credentials: SorobanCredentials::AddressV2(SorobanAddressCredentials {
+            address: wallet.clone().into(),
+            nonce,
+            signature_expiration_ledger,
+            signature: Signatures(map![
+                &env,
+                (delegate.signer_key(&env), delegate.sign(&env, &payload)),
+            ])
+            .try_into()
+            .unwrap(),
+        }),
+        root_invocation,
+    };
+
+    assert!(sac_client
+        .set_auths(&[root_auth])
+        .try_transfer(&wallet, &recipient, &amount)
+        .is_err());
+    assert_eq!(sac_client.balance(&wallet), 100_000_000);
+    assert_eq!(sac_client.balance(&recipient), 0);
+}
+
 /// The core product path, previously untested (audit F1): a WebAuthn passkey
 /// authorizes a real transfer through address credentials.
 #[test]

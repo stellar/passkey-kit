@@ -124,10 +124,10 @@ pub struct SignerExpiration(pub Option<u64>);
 /// - A non-policy required key must be present in the transaction's signatures
 ///   map (and is therefore fully verified — stored, unexpired, crypto-valid —
 ///   in pass 2 of `__check_auth`). Its own limits are not consulted.
-/// - A policy required key must APPROVE the specific context via `policy__`
-///   (it need not appear in the signatures map). If the policy key is also
-///   stored on this wallet it must be unexpired, but its own stored limits are
-///   NOT recursively enforced.
+/// - A policy required key must remain stored and unexpired on this wallet,
+///   and must APPROVE the specific context via `policy__` (it need not appear
+///   in the signatures map). Its own stored limits are NOT recursively
+///   enforced. Removing the policy therefore revokes every dependent signer.
 ///
 /// Consequence: `Some(empty map)` on a key disables that key's INDEPENDENT
 /// coverage only. A key with empty limits can still serve as a required
@@ -139,11 +139,11 @@ pub struct SignerExpiration(pub Option<u64>);
 /// - Deploy permission is NOT grantable through limits: `CreateContract*`
 ///   contexts require an unlimited (`None`) signer. (Pre-1.0 a limits entry
 ///   for the wallet's own address doubled as deploy permission.)
-/// - A limited signer may ALWAYS authorize `remove_signer(its own key)` on
-///   this wallet, regardless of its limits map, and without co-signer
-///   requirements. Self-removal is never escalation. (Execution still
-///   rejects removing the wallet's last durable admin signer — see
-///   `Error::LastAdminSigner`.)
+/// - A limited cryptographic signer may authorize `remove_signer(its own key)`
+///   regardless of its limits map and without co-signer requirements. A
+///   `Signature::Policy` entry must still pass `policy__`, including for
+///   self-removal. Execution also rejects removing the wallet's last durable
+///   admin signer — see `Error::LastAdminSigner`.
 /// - Granting a limits entry for the wallet's own address grants the wallet's
 ///   admin surface (`add_signer`, `update_signer`, `remove_signer`,
 ///   `upgrade`). A signer that can add signers can add an unlimited signer,

@@ -235,7 +235,7 @@ Each method builds an `AssembledTransaction` (`WalletTx`) that wraps one contrac
 | `updateEd25519(publicKey, limits, store, expiration?)` | `update_signer` | Update an Ed25519 signer. |
 | `addPolicy(policy, limits, store, expiration?)` | `add_signer` | Add a policy signer (`policy` = `C…`). Invokes the policy's `install` hook. |
 | `updatePolicy(policy, limits, store, expiration?)` | `update_signer` | Update a policy signer. |
-| `remove(signerKey)` | `remove_signer` | Remove a signer. No policy code runs on this path. |
+| `remove(signerKey)` | `remove_signer` | Remove a signer. A policy entry must pass its own `policy__` check. |
 | `upgrade(newWasmHash)` | `upgrade` | Replace the wallet's WASM (`Buffer`/`Uint8Array`, 32 bytes). |
 | `getSigner(signerKey)` | `get_signer` | Read a signer entry from the ledger (temporary before persistent). Returns `SignerVal \| null`. |
 
@@ -427,6 +427,11 @@ type SignerLimits = Map<string, SignerKey[] | undefined> | undefined;
 - `Map` present but a contract → `undefined` — may authorize any call to that contract, no co-signers.
 - `Map` present, contract → `[keys]` — may authorize calls to that contract **only if every listed key also approves** (required co-signers).
 
+A required policy key must remain installed as a signer and unexpired. Removing
+that policy immediately revokes every signer whose limits require it. A
+`Signature::Policy` always invokes `policy__`, including for the policy's own
+`remove_signer` context.
+
 ```ts
 // This signer may only call C…token, and only alongside a passkey co-signer.
 const limits = new Map([["C…token", [SignerKey.Secp256r1(keyId)]]]);
@@ -457,6 +462,7 @@ Signer and signature expiration are **UNIX timestamps in seconds** (inclusive: v
 - **Deploy front-running remains an accepted residual.** Anyone who learns a `keyId` before deployment could place arbitrary code at the derived address. A signer getter check alone is not proof of ownership, because arbitrary code can answer it however the client expects. Since `0.16.0` `connectWallet` binds accepted code identity (`acceptedWasmHashes`) before reading any signer state, for any address that did not come from trusted local storage. A derivation-resolved address is still not authenticated by that check alone — see the [security analysis](docs/security-deterministic-deployer.md#accepted-residual-address-squatting).
 - **WebAuthn requires User Presence (UP), not User Verification (UV).** The contract requires the UP flag but not UV (biometric/PIN), so it stays compatible with non-UV authenticators. Enforce UV at the client/relayer layer if you need it.
 - **Value-moving policies need a cumulative cap or a co-signer.** A `Signature::Policy` carries no secret, so a per-transfer cap alone is trivially drained by repeated capped transfers. See the [contract interface](#contract-interface) and `sample-policy`.
+- **Existing `binver = 1.0.0` wallets require an authorized upgrade.** Installing the fixed WASM does not change deployed wallet instances. Upgrade each wallet to the canonical `binver = 1.0.1` hash in the current deployment manifest.
 
 ## Contract interface
 
