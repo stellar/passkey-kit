@@ -70,8 +70,8 @@ import { PasskeyKit } from "passkey-kit";
 const kit = new PasskeyKit({
   rpcUrl: "https://soroban-testnet.stellar.org",
   networkPassphrase: "Test SDF Network ; September 2015",
-  // Canonical v1 smart-wallet WASM hash (testnet); see docs/deployments-*.md
-  walletWasmHash: "fdefad64b96837147e1c333e51f537b696eab925e9f147e63d597c04e3c903f0",
+  // Canonical smart-wallet WASM hash; see docs/deployments-*.md
+  walletWasmHash: "b2e858176fab112cc9afbe54590e13d12192ba7fa32dd83cf565d21f2f13179a",
 });
 ```
 
@@ -497,7 +497,7 @@ contractId = sha256(XDR(HashIdPreimage::EnvelopeTypeContractId {
 - The canonical deployer keypair is `Keypair.fromRawEd25519Seed(sha256("kalepail"))`. It salts the deploy and signs the deploy authorization — it never pays fees and never controls the wallet — but its determinism is **load-bearing**: overriding `deploySource` changes every derived address and breaks keyId → wallet discovery.
 - The WASM hash is deliberately **not** in the preimage, so an `upgrade` never moves a wallet's address.
 
-This tuple is normative and must never change. See [`docs/deployments-testnet-2026-07-11.md`](./docs/deployments-testnet-2026-07-11.md) for the canonical WASM hashes, the deployer `G…` address, and the full derivation spec (including the deploy-front-running consequence in [Caveats](#caveats)).
+This tuple is normative and must never change. See [`docs/deployments-2026-08-19.md`](./docs/deployments-2026-08-19.md) for the canonical WASM hash, upload transactions, and upgrade guidance.
 
 ## Repository layout & development
 
