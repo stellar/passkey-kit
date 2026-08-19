@@ -71,7 +71,7 @@ const kit = new PasskeyKit({
   rpcUrl: "https://soroban-testnet.stellar.org",
   networkPassphrase: "Test SDF Network ; September 2015",
   // Canonical smart-wallet WASM hash; see docs/deployments-*.md
-  walletWasmHash: "b2e858176fab112cc9afbe54590e13d12192ba7fa32dd83cf565d21f2f13179a",
+  walletWasmHash: "502ea4e7bdb3ea99880941f1d35ceb67fb598692c0bb40f842ef9c9f17d58b58",
 });
 ```
 

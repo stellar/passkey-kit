@@ -15,7 +15,7 @@ All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry cover
   removed policy revokes its dependent delegate and preserves wallet balances.
   The smart-wallet contract metadata is bumped to `binver = 1.0.1`.
 - **Published the fixed WASM.** Testnet and mainnet now contain
-  `b2e858176fab112cc9afbe54590e13d12192ba7fa32dd83cf565d21f2f13179a`.
+  `502ea4e7bdb3ea99880941f1d35ceb67fb598692c0bb40f842ef9c9f17d58b58`.
   Existing wallets require an authorized upgrade. See
   [`docs/deployments-2026-08-19.md`](./docs/deployments-2026-08-19.md).
 - **Regenerated `passkey-kit-sdk@0.8.1`.** The generated contract specification

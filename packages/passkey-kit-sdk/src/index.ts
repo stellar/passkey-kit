@@ -179,28 +179,24 @@ export type SignerVal = {tag: "Policy", values: readonly [SignerExpiration, Sign
 export type Signatures = readonly [Map<SignerKey, Signature>];
 
 /**
- * Restrictions on which auth contexts a signer may authorize.
+ * Authorization limits for a signer.
  * 
- * - `None`: unlimited. The signer can authorize anything, including
- * `CreateContract*` (deploy) contexts and this wallet's own admin
- * functions.
- * - `Some(empty map)`: NO permissions (fail-closed). The signer can authorize
- * nothing except removing itself (see below). v1 breaking change: pre-1.0
- * an empty map meant unlimited, leaving two unlimited encodings and no
- * "none" encoding.
- * - `Some({address -> None})`: the signer may authorize any invocation of
- * contract `address`, with no co-signers required.
- * - `Some({address -> Some([keys])})`: the signer may authorize invocations
- * of contract `address` only if every listed key also APPROVES. The listed
- * keys are required CO-SIGNERS.
+ * - `None`: unlimited.
+ * - `Some(empty map)`: no independent authority.
+ * - `Some({address -> None})`: any invocation of `address`.
+ * - `Some({address -> Some([keys])})`: any invocation of `address` only when
+ * every listed key also approves.
  * 
- * ## Required co-signers are scope-independent approvers
+ * A required key approves independently of its own limits. A required
+ * non-policy key must appear in the signatures map and pass full verification.
+ * A required policy need not appear there, but it must remain stored and
+ * unexpired. It must also approve through `policy__`. Removing it revokes all
+ * dependent signers.
  * 
- * A required co-signer's OWN `SignerLimits` do NOT constrain its co-signer
- * role — a key's limits govern only its INDEPENDENT authority (whether it can
- * cover a context on its own). This is symmetric across key kinds:
- * 
- * - A non-policy r
+ * Limited signers cannot authorize `CreateContract*`. A limited cryptographic
+ * signer can remove itself without satisfying its limits. A policy signature
+ * always calls `policy__`, including during self-removal. A limit for the
+ * wallet address grants access to the wallet administration functions.
  */
 export type SignerLimits = readonly [Option<Map<string, Option<Array<SignerKey>>>>];
 
@@ -296,7 +292,7 @@ export class Client extends ContractClient {
         "AAAAAgAAAFlTdG9yYWdlIGtleSBpZGVudGlmeWluZyBhIHNpZ25lci4gU2VjcDI1NnIxIGNhcnJpZXMgdGhlIFdlYkF1dGhuCmNyZWRlbnRpYWwgaWQgKGBrZXlJZGApLgAAAAAAAAAAAAAJU2lnbmVyS2V5AAAAAAAAAwAAAAEAAAAAAAAABlBvbGljeQAAAAAAAQAAABMAAAABAAAAAAAAAAdFZDI1NTE5AAAAAAEAAAPuAAAAIAAAAAEAAAAAAAAACVNlY3AyNTZyMQAAAAAAAAEAAAAO",
         "AAAAAgAAAElTdG9yZWQgc2lnbmVyIHZhbHVlLiBTZWNwMjU2cjEgY2FycmllcyB0aGUgU0VDLTEgdW5jb21wcmVzc2VkIHB1YmxpYyBrZXkuAAAAAAAAAAAAAAlTaWduZXJWYWwAAAAAAAADAAAAAQAAAAAAAAAGUG9saWN5AAAAAAACAAAH0AAAABBTaWduZXJFeHBpcmF0aW9uAAAH0AAAAAxTaWduZXJMaW1pdHMAAAABAAAAAAAAAAdFZDI1NTE5AAAAAAIAAAfQAAAAEFNpZ25lckV4cGlyYXRpb24AAAfQAAAADFNpZ25lckxpbWl0cwAAAAEAAAAAAAAACVNlY3AyNTZyMQAAAAAAAAMAAAPuAAAAQQAAB9AAAAAQU2lnbmVyRXhwaXJhdGlvbgAAB9AAAAAMU2lnbmVyTGltaXRz",
         "AAAAAQAAANNUaGUgYF9fY2hlY2tfYXV0aGAgc2lnbmF0dXJlIG9iamVjdDogYSBtYXAgb2Ygc2lnbmVyIGtleXMgdG8gc2lnbmF0dXJlcy4KTWFwIG9yZGVyaW5nIGlzIHRoZSBob3N0J3MgU2NWYWwgb3JkZXJpbmcuIEVWRVJZIGVudHJ5IG11c3QgdmVyaWZ5IChwYXNzCjIgb2YgYF9fY2hlY2tfYXV0aGApIOKAlCBpbmNsdWRlIG9ubHkgc2lnbmF0dXJlcyB0aGF0IGFyZSBuZWVkZWQuAAAAAAAAAAAKU2lnbmF0dXJlcwAAAAAAAQAAAAAAAAABMAAAAAAAA+wAAAfQAAAACVNpZ25lcktleQAAAAAAB9AAAAAJU2lnbmF0dXJlAAAA",
-        "AAAAAQAABABSZXN0cmljdGlvbnMgb24gd2hpY2ggYXV0aCBjb250ZXh0cyBhIHNpZ25lciBtYXkgYXV0aG9yaXplLgoKLSBgTm9uZWA6IHVubGltaXRlZC4gVGhlIHNpZ25lciBjYW4gYXV0aG9yaXplIGFueXRoaW5nLCBpbmNsdWRpbmcKYENyZWF0ZUNvbnRyYWN0KmAgKGRlcGxveSkgY29udGV4dHMgYW5kIHRoaXMgd2FsbGV0J3Mgb3duIGFkbWluCmZ1bmN0aW9ucy4KLSBgU29tZShlbXB0eSBtYXApYDogTk8gcGVybWlzc2lvbnMgKGZhaWwtY2xvc2VkKS4gVGhlIHNpZ25lciBjYW4gYXV0aG9yaXplCm5vdGhpbmcgZXhjZXB0IHJlbW92aW5nIGl0c2VsZiAoc2VlIGJlbG93KS4gdjEgYnJlYWtpbmcgY2hhbmdlOiBwcmUtMS4wCmFuIGVtcHR5IG1hcCBtZWFudCB1bmxpbWl0ZWQsIGxlYXZpbmcgdHdvIHVubGltaXRlZCBlbmNvZGluZ3MgYW5kIG5vCiJub25lIiBlbmNvZGluZy4KLSBgU29tZSh7YWRkcmVzcyAtPiBOb25lfSlgOiB0aGUgc2lnbmVyIG1heSBhdXRob3JpemUgYW55IGludm9jYXRpb24gb2YKY29udHJhY3QgYGFkZHJlc3NgLCB3aXRoIG5vIGNvLXNpZ25lcnMgcmVxdWlyZWQuCi0gYFNvbWUoe2FkZHJlc3MgLT4gU29tZShba2V5c10pfSlgOiB0aGUgc2lnbmVyIG1heSBhdXRob3JpemUgaW52b2NhdGlvbnMKb2YgY29udHJhY3QgYGFkZHJlc3NgIG9ubHkgaWYgZXZlcnkgbGlzdGVkIGtleSBhbHNvIEFQUFJPVkVTLiBUaGUgbGlzdGVkCmtleXMgYXJlIHJlcXVpcmVkIENPLVNJR05FUlMuCgojIyBSZXF1aXJlZCBjby1zaWduZXJzIGFyZSBzY29wZS1pbmRlcGVuZGVudCBhcHByb3ZlcnMKCkEgcmVxdWlyZWQgY28tc2lnbmVyJ3MgT1dOIGBTaWduZXJMaW1pdHNgIGRvIE5PVCBjb25zdHJhaW4gaXRzIGNvLXNpZ25lcgpyb2xlIOKAlCBhIGtleSdzIGxpbWl0cyBnb3Zlcm4gb25seSBpdHMgSU5ERVBFTkRFTlQgYXV0aG9yaXR5ICh3aGV0aGVyIGl0IGNhbgpjb3ZlciBhIGNvbnRleHQgb24gaXRzIG93bikuIFRoaXMgaXMgc3ltbWV0cmljIGFjcm9zcyBrZXkga2luZHM6CgotIEEgbm9uLXBvbGljeSByAAAAAAAAAAxTaWduZXJMaW1pdHMAAAABAAAAAAAAAAEwAAAAAAAD6AAAA+wAAAATAAAD6AAAA+oAAAfQAAAACVNpZ25lcktleQAAAA==",
+        "AAAAAQAAA2lBdXRob3JpemF0aW9uIGxpbWl0cyBmb3IgYSBzaWduZXIuCgotIGBOb25lYDogdW5saW1pdGVkLgotIGBTb21lKGVtcHR5IG1hcClgOiBubyBpbmRlcGVuZGVudCBhdXRob3JpdHkuCi0gYFNvbWUoe2FkZHJlc3MgLT4gTm9uZX0pYDogYW55IGludm9jYXRpb24gb2YgYGFkZHJlc3NgLgotIGBTb21lKHthZGRyZXNzIC0+IFNvbWUoW2tleXNdKX0pYDogYW55IGludm9jYXRpb24gb2YgYGFkZHJlc3NgIG9ubHkgd2hlbgpldmVyeSBsaXN0ZWQga2V5IGFsc28gYXBwcm92ZXMuCgpBIHJlcXVpcmVkIGtleSBhcHByb3ZlcyBpbmRlcGVuZGVudGx5IG9mIGl0cyBvd24gbGltaXRzLiBBIHJlcXVpcmVkCm5vbi1wb2xpY3kga2V5IG11c3QgYXBwZWFyIGluIHRoZSBzaWduYXR1cmVzIG1hcCBhbmQgcGFzcyBmdWxsIHZlcmlmaWNhdGlvbi4KQSByZXF1aXJlZCBwb2xpY3kgbmVlZCBub3QgYXBwZWFyIHRoZXJlLCBidXQgaXQgbXVzdCByZW1haW4gc3RvcmVkIGFuZAp1bmV4cGlyZWQuIEl0IG11c3QgYWxzbyBhcHByb3ZlIHRocm91Z2ggYHBvbGljeV9fYC4gUmVtb3ZpbmcgaXQgcmV2b2tlcyBhbGwKZGVwZW5kZW50IHNpZ25lcnMuCgpMaW1pdGVkIHNpZ25lcnMgY2Fubm90IGF1dGhvcml6ZSBgQ3JlYXRlQ29udHJhY3QqYC4gQSBsaW1pdGVkIGNyeXB0b2dyYXBoaWMKc2lnbmVyIGNhbiByZW1vdmUgaXRzZWxmIHdpdGhvdXQgc2F0aXNmeWluZyBpdHMgbGltaXRzLiBBIHBvbGljeSBzaWduYXR1cmUKYWx3YXlzIGNhbGxzIGBwb2xpY3lfX2AsIGluY2x1ZGluZyBkdXJpbmcgc2VsZi1yZW1vdmFsLiBBIGxpbWl0IGZvciB0aGUKd2FsbGV0IGFkZHJlc3MgZ3JhbnRzIGFjY2VzcyB0byB0aGUgd2FsbGV0IGFkbWluaXN0cmF0aW9uIGZ1bmN0aW9ucy4AAAAAAAAAAAAADFNpZ25lckxpbWl0cwAAAAEAAAAAAAAAATAAAAAAAAPoAAAD7AAAABMAAAPoAAAD6gAAB9AAAAAJU2lnbmVyS2V5AAAA",
         "AAAAAgAAAIRXaGljaCBkdXJhYmlsaXR5IGEgc2lnbmVyIGVudHJ5IGlzIHN0b3JlZCB1bmRlci4gQXQgbW9zdCBvbmUgZW50cnkgZXhpc3RzCnBlciBzaWduZXIga2V5OyBsb29rdXBzIGNoZWNrIFRlbXBvcmFyeSBiZWZvcmUgUGVyc2lzdGVudC4AAAAAAAAADVNpZ25lclN0b3JhZ2UAAAAAAAACAAAAAAAAAAAAAAAKUGVyc2lzdGVudAAAAAAAAAAAAAAAAAAJVGVtcG9yYXJ5AAAA",
         "AAAAAQAAAY5PcHRpb25hbCBleHBpcmF0aW9uIGZvciBhIHNpZ25lciBhcyBhIFVOSVggdGltZXN0YW1wIGluIHNlY29uZHMsIElOQ0xVU0lWRToKdGhlIHNpZ25lciBpcyB2YWxpZCB3aGlsZSBgbGVkZ2VyIHRpbWVzdGFtcCA8PSBleHBpcmF0aW9uYCBhbmQgZXhwaXJlZCBvbmNlCmBsZWRnZXIgdGltZXN0YW1wID4gZXhwaXJhdGlvbmAuIGBOb25lYCBuZXZlciBleHBpcmVzLgoKdjEgYnJlYWtpbmcgY2hhbmdlOiB0aGlzIHdhcyBhIGxlZGdlciBzZXF1ZW5jZSBudW1iZXIgcHJlLTEuMC4gVGltZXN0YW1wcwpkb24ndCBkcmlmdCB3aXRoIGNoYW5nZXMgdG8gbGVkZ2VyIGNsb3NlIHRpbWUgKGUuZy4gQ0FQLTAwNzAgZHluYW1pYwp0aW1pbmcpLCB3aGljaCBsZWRnZXItc2VxdWVuY2UgZXhwaXJhdGlvbnMgZGlkLgAAAAAAAAAAABBTaWduZXJFeHBpcmF0aW9uAAAAAQAAAAAAAAABMAAAAAAAA+gAAAAG",
         "AAAAAQAAAMhBIFdlYkF1dGhuIGFzc2VydGlvbiBvdmVyIHRoZSBTb3JvYmFuIGF1dGhvcml6YXRpb24gcGF5bG9hZC4gVGhlIHNpZ25lZAptZXNzYWdlIGlzIGBhdXRoZW50aWNhdG9yX2RhdGEgfHwgc2hhMjU2KGNsaWVudF9kYXRhX2pzb24pYCBhbmQgdGhlCnBheWxvYWQgYmluZGluZyBsaXZlcyBpbiBjbGllbnREYXRhSlNPTidzIGBjaGFsbGVuZ2VgIGZpZWxkLgAAAAAAAAASU2VjcDI1NnIxU2lnbmF0dXJlAAAAAAADAAAAAAAAABJhdXRoZW50aWNhdG9yX2RhdGEAAAAAAA4AAAAAAAAAEGNsaWVudF9kYXRhX2pzb24AAAAOAAAAAAAAAAlzaWduYXR1cmUAAAAAAAPuAAAAQA==",
