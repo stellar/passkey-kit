@@ -101,12 +101,12 @@ This is an accepted, documented residual:
   control of a correctly deployed wallet — the deployer is never a wallet signer.
   The one SDK-level consequence was that `connectWallet` resolved a secondary
   `keyId` by derivation first, so a squat at `derive(keyId_2)` could win over the
-  correct wallet; resolution is now trusted-state-first (storage → indexer →
-  derivation) with a live-signer ownership check, so a squat no longer misbinds
-  a returning user. A first connect on a fresh device with no local record still
-  falls through to the indexer and then to derivation; since `0.16.0` both bind
-  accepted code identity before any signer state is read. A derivation-resolved
-  address remains unauthenticated by construction — see below.
+  correct wallet. Resolution now checks storage, the indexer, and derivation in
+  that order. A stored address is trusted only when it is explicitly secondary
+  and differs from the deterministic deployment address. Primary predictions,
+  legacy rows, indexer results, and derived addresses bind accepted code before
+  signer state. A derivation-resolved address remains unauthenticated by
+  construction — see below.
 
 A signer-presence check **alone is not a mitigation**. Arbitrary code at a
 squatted address can implement `get_signer`, `list`, or an equivalent getter and
@@ -200,13 +200,14 @@ SDK now binds accepted code identity *before* reading any signer state.
 Note this is independent of the deployer key: it needs no derived address and no
 squatting. It is a property of unauthenticated discovery.
 
-### What is enforced (since `0.16.0`)
+### What is enforced
 
 `connectWallet` checks the resolved contract's executable against
-`acceptedWasmHashes` whenever the address came from an untrusted source. Defaults
-to `[walletWasmHash]`; `verifyWasmHash` overrides per call. An address resolved
-from trusted local storage is not checked, so a legitimately upgraded wallet still
-opens for a returning user.
+`acceptedWasmHashes` whenever the address lacks trusted local provenance.
+Defaults to `[walletWasmHash]`; `verifyWasmHash` overrides per call. Primary
+deployment predictions and legacy storage rows receive the check. Only an
+explicitly secondary association to a different address skips it, so a
+legitimately upgraded wallet still opens for a returning user.
 
 ### What this does and does not cover
 

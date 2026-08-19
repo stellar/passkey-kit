@@ -1,11 +1,9 @@
 /**
  * `connectWallet` resolution + verification behavior:
  *
- * - Address resolution is trusted-state-first: local storage, then the injected
- *   indexer, then deterministic derivation LAST. Derivation is only correct for
- *   a wallet's first credential and is the one path a squatted contract at the
- *   derived address can hijack, so it must never win over a stored/indexed
- *   association.
+ * - Address resolution uses local storage, then the injected indexer, then
+ *   deterministic derivation LAST. A primary stored row is still a deployment
+ *   prediction, so only an explicitly secondary association is trusted state.
  * - A transport error on the derived-address instance read PROPAGATES — it must
  *   never be misread as not-found (derivation is reached only when storage and
  *   the indexer both miss).
@@ -87,6 +85,46 @@ describe("restore source resolution", () => {
   });
 });
 
+describe("createWallet connection state", () => {
+  it("stores a primary prediction but remains disconnected before submission", async () => {
+    const storage = new MemoryStorage();
+    const kit = makeKit(storage);
+    const submissionManager = (
+      kit as unknown as {
+        submissionManager: {
+          buildDeployTransaction: (...args: unknown[]) => Promise<unknown>;
+          signDeploy: (tx: unknown) => Promise<string>;
+        };
+      }
+    ).submissionManager;
+    const created = {
+      rawResponse: {} as never,
+      keyId: KEY_ID_B64,
+      keyIdBuffer: KEY_ID,
+      publicKey: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
+    };
+    const deployTx = { result: { options: { contractId: STORED_WALLET } } };
+
+    vi.spyOn(kit, "createKey").mockResolvedValue(created);
+    vi.spyOn(submissionManager, "buildDeployTransaction").mockResolvedValue(
+      deployTx
+    );
+    vi.spyOn(submissionManager, "signDeploy").mockResolvedValue("signed-xdr");
+
+    await expect(kit.createWallet("App", "User")).resolves.toMatchObject({
+      contractId: STORED_WALLET,
+      signedTx: "signed-xdr",
+    });
+
+    expect(kit.wallet).toBeUndefined();
+    expect(kit.keyId).toBeUndefined();
+    await expect(storage.get(KEY_ID_B64)).resolves.toMatchObject({
+      contractId: STORED_WALLET,
+      isPrimary: true,
+    });
+  });
+});
+
 /** A ledger entry whose contractData().val() decodes to a live SignerVal. */
 function signerEntry() {
   const spec = (
@@ -144,7 +182,7 @@ describe("connectWallet address resolution", () => {
     );
   });
 
-  it("prefers stored state over a squattable derived address — no derivation probe", async () => {
+  it("prefers an explicit secondary association without a code check", async () => {
     // The security fix: a stored association wins outright, so a secondary
     // passkey never resolves to derive(keyId) even if an attacker squatted code
     // there. `getLedgerEntries` is only the ownership check on the stored wallet.
@@ -153,6 +191,7 @@ describe("connectWallet address resolution", () => {
       keyId: KEY_ID_B64,
       publicKey: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
       contractId: STORED_WALLET,
+      isPrimary: false,
       createdAt: 0,
     });
     const kitS = makeKit(storage);
@@ -260,6 +299,7 @@ describe("addSecp256r1 persistence", () => {
     expect(tx).toBe("AT_ADD");
     const stored = await storage.get(NEW_KEY_ID);
     expect(stored?.contractId).toBe(STORED_WALLET);
+    expect(stored?.isPrimary).toBe(false);
     expect(Buffer.from(stored!.publicKey)).toEqual(NEW_PUBKEY);
   });
 
@@ -284,6 +324,52 @@ describe("addSecp256r1 persistence", () => {
 });
 
 describe("connectWallet code identity (default-on for untrusted resolution)", () => {
+  it("checks a stored primary deployment prediction before signer state", async () => {
+    const storage = new MemoryStorage();
+    await storage.save({
+      keyId: KEY_ID_B64,
+      publicKey: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
+      contractId: STORED_WALLET,
+      isPrimary: true,
+      createdAt: 0,
+    });
+    const kit = makeKit(storage);
+    const signerRead = vi.spyOn(kit.rpc, "getLedgerEntries");
+    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
+      instanceWithWasm("cd".repeat(32)) as never
+    );
+
+    await expect(
+      kit.connectWallet({ keyId: KEY_ID_B64 })
+    ).rejects.toBeInstanceOf(WalletOwnershipError);
+
+    expect(signerRead).not.toHaveBeenCalled();
+    expect(kit.wallet).toBeUndefined();
+  });
+
+  it("checks a legacy stored row instead of assuming trusted provenance", async () => {
+    const storage = new MemoryStorage();
+    await storage.save({
+      keyId: KEY_ID_B64,
+      publicKey: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
+      contractId: STORED_WALLET,
+      createdAt: 0,
+    });
+    const kit = makeKit(storage);
+    const codeRead = vi
+      .spyOn(kit.rpc, "getContractData")
+      .mockResolvedValue(instanceWithWasm(WASM_HASH) as never);
+    vi.spyOn(kit.rpc, "getLedgerEntries").mockResolvedValue({
+      entries: [signerEntry()],
+    } as never);
+
+    await expect(
+      kit.connectWallet({ keyId: KEY_ID_B64 })
+    ).resolves.toMatchObject({ contractId: STORED_WALLET });
+
+    expect(codeRead).toHaveBeenCalled();
+  });
+
   it("REJECTS an indexer row running unaccepted code, with no opt-in", async () => {
     // The reverse lookup is a claim by an untrusted party: any contract can emit
     // the signer events an indexer keys on AND write the signer ledger entry we
@@ -311,12 +397,13 @@ describe("connectWallet code identity (default-on for untrusted resolution)", ()
     expect(getLedgerEntries).not.toHaveBeenCalled();
   });
 
-  it("does NOT check a storage-resolved address, so an upgraded wallet still opens", async () => {
+  it("does NOT check an explicit secondary association, so an upgraded wallet opens", async () => {
     const storage = new MemoryStorage();
     await storage.save({
       keyId: KEY_ID_B64,
       publicKey: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
       contractId: STORED_WALLET,
+      isPrimary: false,
       createdAt: 0,
     });
     const kitS = makeKit(storage);

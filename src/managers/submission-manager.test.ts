@@ -22,7 +22,10 @@ import { resolveDeployer } from "../kit/deploy-ops.js";
 import { PasskeyKitErrorCode } from "../errors.js";
 import { RelayerClient } from "../relayer.js";
 import { PasskeyServer } from "../server.js";
-import { SubmissionManager } from "./submission-manager.js";
+import {
+  authEntryNonceFromBytes,
+  SubmissionManager,
+} from "./submission-manager.js";
 
 const NETWORK = Networks.TESTNET;
 const WASM_HASH = "ab".repeat(32);
@@ -169,6 +172,22 @@ describe("SubmissionManager deploy authorization", () => {
       undefined
     );
     expect(sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it("does not depend on Buffer BigInt accessors for the auth nonce", () => {
+    const unsupportedAccessor = vi
+      .spyOn(Buffer.prototype, "readBigInt64BE")
+      .mockImplementation(() => {
+        throw new Error("readBigInt64BE is unavailable");
+      });
+
+    expect(
+      authEntryNonceFromBytes(
+        Uint8Array.from([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])
+      ).toString()
+    ).toBe("-1");
+
+    expect(unsupportedAccessor).not.toHaveBeenCalled();
   });
 
   it("refuses to sign a shared deploy auth entry carrying sub-invocations", async () => {

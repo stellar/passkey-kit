@@ -82,6 +82,12 @@ export interface StoredPasskey {
   /** Smart-wallet contract address this passkey controls. */
   contractId: string;
 
+  /**
+   * Whether this passkey predicted the wallet's deterministic deployment.
+   * An omitted legacy value is not trusted as a secondary association.
+   */
+  isPrimary?: boolean;
+
   /** User-friendly label for this passkey. */
   nickname?: string;
 
@@ -128,7 +134,7 @@ export interface StorageAdapter {
 // Result types
 // ============================================================================
 
-/** Result of creating (deploying) a new smart wallet. */
+/** Result of creating a passkey and its wallet deployment artifacts. */
 export interface CreateWalletResult {
   /** The raw WebAuthn registration response. */
   rawResponse: RegistrationResponseJSON;
@@ -139,7 +145,7 @@ export interface CreateWalletResult {
   /** Base64URL-encoded credential id. */
   keyIdBase64: string;
 
-  /** Deployed smart-wallet contract address. */
+  /** Predicted smart-wallet contract address. */
   contractId: string;
 
   /** Authorized deployment carrier, ready to submit (base64 XDR). */

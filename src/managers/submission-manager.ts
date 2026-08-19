@@ -26,6 +26,17 @@ import { isDefaultDeployer } from "../utils.js";
 
 const DEPLOY_AUTH_LIFETIME_LEDGERS = 720;
 
+export function authEntryNonceFromBytes(bytes: Uint8Array): xdr.Int64 {
+  if (bytes.byteLength !== 8) {
+    throw new Error("auth entry nonce requires exactly 8 bytes");
+  }
+  return xdr.Int64.fromString(
+    new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      .getBigInt64(0, false)
+      .toString()
+  );
+}
+
 export interface SubmissionManagerDeps {
   rpc: Server;
   rpcUrl: string;
@@ -131,9 +142,7 @@ export class SubmissionManager {
       const expirationLedger = latestLedger + DEPLOY_AUTH_LIFETIME_LEDGERS;
       const credentials = new xdr.SorobanAddressCredentials({
         address: Address.fromString(this.deployerPublicKey).toScAddress(),
-        nonce: xdr.Int64.fromString(
-          Buffer.from(nonceBytes).readBigInt64BE().toString()
-        ),
+        nonce: authEntryNonceFromBytes(nonceBytes),
         signatureExpirationLedger: expirationLedger,
         signature: xdr.ScVal.scvVoid(),
       });

@@ -2,6 +2,16 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.16.5 — 2026-08-19
+
+- **Fixed browser deploy authorization.** Shared-deployer nonce generation now
+  uses `DataView` instead of `Buffer.readBigInt64BE`, which is absent from common
+  browser `Buffer` polyfills.
+- **Kept deployment predictions untrusted.** `createWallet` no longer marks the
+  kit connected before submission. Primary and legacy stored rows now receive
+  the wallet code-identity check. Explicit secondary associations keep the
+  existing upgrade exception.
+
 ## 0.16.4 — 2026-08-19
 
 - **Documented the security status.** The public READMEs now state that the

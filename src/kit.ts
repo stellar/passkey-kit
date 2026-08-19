@@ -261,9 +261,9 @@ export class PasskeyKit {
   }
 
   /**
-   * Register a passkey and deploy a smart wallet initialized with it as the
-   * first signer. Returns the authorized deploy carrier (submit it via
-   * `PasskeyServer`).
+   * Register a passkey and build a smart-wallet deployment initialized with it
+   * as the first signer. The kit remains disconnected until the caller confirms
+   * submission and calls `connectWallet`.
    */
   async createWallet(
     appName: string,
@@ -278,19 +278,13 @@ export class PasskeyKit {
     );
     const contractId = deployTx.result.options.contractId;
 
-    this.wallet = new PasskeyClient({
-      contractId,
-      rpcUrl: this.rpcUrl,
-      networkPassphrase: this.networkPassphrase,
-    });
-    this.keyId = created.keyId;
-
     const signedTx = await this.submissionManager.signDeploy(deployTx);
 
     await this.credentialManager.rememberPasskey({
       keyId: created.keyId,
       publicKey: created.publicKey,
       contractId,
+      isPrimary: true,
       createdAt: Date.now(),
     });
 
@@ -341,22 +335,25 @@ export class PasskeyKit {
     //   1) local storage, 2) injected indexer lookup, 3) derivation.
     // The keyId is still verified as a live signer below (F7), so a stale hint
     // can never connect to a wallet the passkey does not actually control.
-    let contractId = await this.credentialManager.lookupContractId(keyIdBase64);
-    // Whether the address came from trusted local state. An indexer row or a
-    // derived address is a CLAIM by an untrusted party: any contract can emit
-    // the signer events an indexer keys on, and any contract can write the
-    // signer ledger entry we read back. Both are checked against accepted code
-    // identity below; trusted state is not, so an upgraded wallet still opens.
-    const fromTrustedState = contractId !== undefined;
+    const storedPasskey = await this.credentialManager.getPasskey(keyIdBase64);
+    let contractId = storedPasskey?.contractId;
+    const derivedContractId =
+      this.submissionManager.deriveWalletAddress(keyIdBuffer);
+    // A primary row stores a deployment prediction, not a confirmed wallet.
+    // Only an explicitly secondary mapping to a different address is trusted
+    // local association state. Legacy rows fail closed through the code check.
+    const fromTrustedState =
+      storedPasskey?.isPrimary === false &&
+      storedPasskey.contractId !== "" &&
+      storedPasskey.contractId !== derivedContractId;
     if (!contractId && options?.getContractId) {
       contractId = await options.getContractId(keyIdBase64);
     }
     if (!contractId) {
       // Transport errors (429/5xx/timeout) propagate — only an authoritative
       // not-found leaves the derived address unresolved.
-      const derived = this.submissionManager.deriveWalletAddress(keyIdBuffer);
-      if (await contractInstanceExists(this.rpc, derived)) {
-        contractId = derived;
+      if (await contractInstanceExists(this.rpc, derivedContractId)) {
+        contractId = derivedContractId;
       }
     }
 
@@ -506,6 +503,7 @@ export class PasskeyKit {
             ? publicKey
             : base64url.toBuffer(publicKey),
         contractId,
+        isPrimary: false,
         createdAt: Date.now(),
       });
     }
