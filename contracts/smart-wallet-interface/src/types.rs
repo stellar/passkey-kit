@@ -100,54 +100,24 @@ pub enum Error {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignerExpiration(pub Option<u64>);
 
-/// Restrictions on which auth contexts a signer may authorize.
+/// Authorization limits for a signer.
 ///
-/// - `None`: unlimited. The signer can authorize anything, including
-///   `CreateContract*` (deploy) contexts and this wallet's own admin
-///   functions.
-/// - `Some(empty map)`: NO permissions (fail-closed). The signer can authorize
-///   nothing except removing itself (see below). v1 breaking change: pre-1.0
-///   an empty map meant unlimited, leaving two unlimited encodings and no
-///   "none" encoding.
-/// - `Some({address -> None})`: the signer may authorize any invocation of
-///   contract `address`, with no co-signers required.
-/// - `Some({address -> Some([keys])})`: the signer may authorize invocations
-///   of contract `address` only if every listed key also APPROVES. The listed
-///   keys are required CO-SIGNERS.
+/// - `None`: unlimited.
+/// - `Some(empty map)`: no independent authority.
+/// - `Some({address -> None})`: any invocation of `address`.
+/// - `Some({address -> Some([keys])})`: any invocation of `address` only when
+///   every listed key also approves.
 ///
-/// ## Required co-signers are scope-independent approvers
+/// A required key approves independently of its own limits. A required
+/// non-policy key must appear in the signatures map and pass full verification.
+/// A required policy need not appear there, but it must remain stored and
+/// unexpired. It must also approve through `policy__`. Removing it revokes all
+/// dependent signers.
 ///
-/// A required co-signer's OWN `SignerLimits` do NOT constrain its co-signer
-/// role — a key's limits govern only its INDEPENDENT authority (whether it can
-/// cover a context on its own). This is symmetric across key kinds:
-///
-/// - A non-policy required key must be present in the transaction's signatures
-///   map (and is therefore fully verified — stored, unexpired, crypto-valid —
-///   in pass 2 of `__check_auth`). Its own limits are not consulted.
-/// - A policy required key must remain stored and unexpired on this wallet,
-///   and must APPROVE the specific context via `policy__` (it need not appear
-///   in the signatures map). Its own stored limits are NOT recursively
-///   enforced. Removing the policy therefore revokes every dependent signer.
-///
-/// Consequence: `Some(empty map)` on a key disables that key's INDEPENDENT
-/// coverage only. A key with empty limits can still serve as a required
-/// co-signer for another signer. Because no stored policy's limits are
-/// re-entered, there is no policy-limit recursion (and thus no cycle to
-/// guard against).
-///
-/// Notes:
-/// - Deploy permission is NOT grantable through limits: `CreateContract*`
-///   contexts require an unlimited (`None`) signer. (Pre-1.0 a limits entry
-///   for the wallet's own address doubled as deploy permission.)
-/// - A limited cryptographic signer may authorize `remove_signer(its own key)`
-///   regardless of its limits map and without co-signer requirements. A
-///   `Signature::Policy` entry must still pass `policy__`, including for
-///   self-removal. Execution also rejects removing the wallet's last durable
-///   admin signer — see `Error::LastAdminSigner`.
-/// - Granting a limits entry for the wallet's own address grants the wallet's
-///   admin surface (`add_signer`, `update_signer`, `remove_signer`,
-///   `upgrade`). A signer that can add signers can add an unlimited signer,
-///   so treat such a grant as equivalent to full control of the wallet.
+/// Limited signers cannot authorize `CreateContract*`. A limited cryptographic
+/// signer can remove itself without satisfying its limits. A policy signature
+/// always calls `policy__`, including during self-removal. A limit for the
+/// wallet address grants access to the wallet administration functions.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignerLimits(pub Option<Map<Address, Option<Vec<SignerKey>>>>);
