@@ -92,7 +92,16 @@ artifacts byte-for-byte.
 
 ## Mainnet
 
-Not deployed. A mainnet upload will be recorded in a follow-up manifest.
+The smart-wallet WASM was uploaded to mainnet on 2026-07-14.
+
+- Upload source: `GD2GA2JF6OJURU36COZQWJLPEJ7XC3GB25TBD7U4ALCGKOG27262RICH`
+- Upload transaction: `f481acfe8eba4537bf6ac08ab38f0d545ed21f7078c5903ef8014a1f5c3bfc3b`
+- Upload ledger: `63473651`
+- Upload time: `2026-07-14T13:24:07Z`
+- Uploaded WASM hash: `fdefad64b96837147e1c333e51f537b696eab925e9f147e63d597c04e3c903f0`
+
+This transaction uploaded contract code only. It did not create or upgrade a
+wallet instance.
 
 ## Deterministic wallet address derivation (NORMATIVE)
 
