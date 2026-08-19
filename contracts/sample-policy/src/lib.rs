@@ -40,8 +40,9 @@
 //! - **Single-charge accounting.** This policy COMMITS spend in
 //!   `policy__`. That is safe against multi-charging because the v1 wallet
 //!   invokes limit-key policies only after every side-effect-free requirement
-//!   of the candidate signer has already passed (co-signer presence, stored
-//!   policy expiration), so a losing candidate never charges the allowance.
+//!   of the candidate signer has already passed (co-signer presence, required
+//!   policy presence and expiration), so a losing candidate never charges the
+//!   allowance.
 //!   Two caveats a copied policy inherits: never combine multiple
 //!   state-committing policies in one required-keys list (an earlier
 //!   policy's commit survives a later one's rejection if the auth succeeds

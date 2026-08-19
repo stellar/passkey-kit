@@ -4,7 +4,7 @@ use smart_wallet_interface::{
 };
 use soroban_sdk::{
     auth::{Context, ContractContext},
-    vec, Env, Symbol, TryFromVal, Vec,
+    vec, Env, Symbol, TryFromVal,
 };
 
 use crate::signer::{get_signer_val_storage, is_signer_expired, signer_expiration};
@@ -35,15 +35,6 @@ pub fn is_self_removal_context(env: &Env, context: &Context, signer_key: &Signer
     false
 }
 
-/// True iff `contexts` is EXACTLY ONE context and it is `signer_key`'s own
-/// self-removal on this wallet. Used by pass 2 of `__check_auth` to let a
-/// policy signer self-remove without consulting its (possibly rejecting)
-/// `policy__` — but ONLY when nothing else is being authorized, so the skip
-/// can never leak authority to another context.
-pub fn is_sole_self_removal(env: &Env, contexts: &Vec<Context>, signer_key: &SignerKey) -> bool {
-    contexts.len() == 1 && is_self_removal_context(env, &contexts.get_unchecked(0), signer_key)
-}
-
 /// Decide whether `signer_key` (with `signer_limits`) may authorize
 /// `context`.
 ///
@@ -62,9 +53,9 @@ pub fn is_sole_self_removal(env: &Env, contexts: &Vec<Context>, signer_key: &Sig
 ///
 /// Expiration of the candidate itself is NOT checked here — every signatures
 /// map entry gets a single-point expiration check in pass 2 of
-/// `__check_auth`. Stored policy keys referenced inside limits ARE
-/// expiration-checked here (boolean), because they need not appear in the
-/// signatures map and would otherwise never be checked.
+/// `__check_auth`. Policy keys referenced inside limits must still be stored
+/// and unexpired, because they need not appear in the signatures map and would
+/// otherwise bypass both checks.
 pub fn verify_context(
     env: &Env,
     context: &Context,
@@ -116,18 +107,18 @@ pub fn verify_context(
 ///   expiration and crypto are enforced by pass 2 of `__check_auth`. Their
 ///   own `SignerLimits` are NOT consulted here.
 /// - Policy keys need not be in the signatures map (they can be "adjacent"
-///   requirements). The policy must APPROVE this context via `policy__`. If
-///   the policy key is also stored on this wallet it must be unexpired, but
-///   its own `SignerLimits` are NOT recursively enforced. Because no stored
-///   policy's limits are re-entered, there is no policy-limit recursion and
-///   thus no cycle to guard against.
+///   requirements), but they must still be stored and unexpired on this
+///   wallet. The policy must APPROVE this context via `policy__`. Its own
+///   `SignerLimits` are NOT recursively enforced. Because no stored policy's
+///   limits are re-entered, there is no policy-limit recursion and thus no
+///   cycle to guard against.
 ///
 /// ## Ordering: side-effect-free checks first, policies last
 ///
 /// `policy__` may commit state (e.g. a cumulative spend allowance), so it
 /// must never run for a candidate that was going to fail anyway. The checks
 /// therefore run in three phases: (1) presence of every non-policy required
-/// key, (2) expiration of every STORED required policy, (3) only then the
+/// key, (2) presence and expiration of every required policy, (3) only then the
 /// `policy__` invocations. A candidate that fails phase 1 or 2 rejects
 /// without any policy having been consulted, so a value-committing policy is
 /// charged only when its candidate's every other requirement holds.
@@ -165,15 +156,18 @@ fn verify_signer_limit_keys(
         }
     }
 
-    // Phase 2: if a required policy is stored on this wallet it must be
-    // unexpired (it need not be in the signatures map, so pass 2 would not
-    // otherwise check it). Still no policy code runs.
+    // Phase 2: every required policy must still be stored on this wallet and
+    // unexpired. A missing policy fails closed: removing it must revoke every
+    // signer whose limits require it, not erase a stored expiration gate.
+    // Policies need not be in the signatures map, so pass 2 of `__check_auth`
+    // would not otherwise check them. Still no policy code runs.
     for required_key in required_keys.iter() {
         if matches!(required_key, SignerKey::Policy(_)) {
-            if let Some((signer_val, _)) = get_signer_val_storage(env, &required_key, true) {
-                if is_signer_expired(env, signer_expiration(&signer_val)) {
-                    return false;
-                }
+            let Some((signer_val, _)) = get_signer_val_storage(env, &required_key, true) else {
+                return false;
+            };
+            if is_signer_expired(env, signer_expiration(&signer_val)) {
+                return false;
             }
         }
     }

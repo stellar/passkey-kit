@@ -70,8 +70,8 @@ import { PasskeyKit } from "passkey-kit";
 const kit = new PasskeyKit({
   rpcUrl: "https://soroban-testnet.stellar.org",
   networkPassphrase: "Test SDF Network ; September 2015",
-  // Canonical v1 smart-wallet WASM hash (testnet); see docs/deployments-*.md
-  walletWasmHash: "fdefad64b96837147e1c333e51f537b696eab925e9f147e63d597c04e3c903f0",
+  // Canonical smart-wallet WASM hash; see docs/deployments-*.md
+  walletWasmHash: "502ea4e7bdb3ea99880941f1d35ceb67fb598692c0bb40f842ef9c9f17d58b58",
 });
 ```
 
@@ -235,7 +235,7 @@ Each method builds an `AssembledTransaction` (`WalletTx`) that wraps one contrac
 | `updateEd25519(publicKey, limits, store, expiration?)` | `update_signer` | Update an Ed25519 signer. |
 | `addPolicy(policy, limits, store, expiration?)` | `add_signer` | Add a policy signer (`policy` = `C…`). Invokes the policy's `install` hook. |
 | `updatePolicy(policy, limits, store, expiration?)` | `update_signer` | Update a policy signer. |
-| `remove(signerKey)` | `remove_signer` | Remove a signer. No policy code runs on this path. |
+| `remove(signerKey)` | `remove_signer` | Remove a signer. A policy entry must pass its own `policy__` check. |
 | `upgrade(newWasmHash)` | `upgrade` | Replace the wallet's WASM (`Buffer`/`Uint8Array`, 32 bytes). |
 | `getSigner(signerKey)` | `get_signer` | Read a signer entry from the ledger (temporary before persistent). Returns `SignerVal \| null`. |
 
@@ -427,6 +427,11 @@ type SignerLimits = Map<string, SignerKey[] | undefined> | undefined;
 - `Map` present but a contract → `undefined` — may authorize any call to that contract, no co-signers.
 - `Map` present, contract → `[keys]` — may authorize calls to that contract **only if every listed key also approves** (required co-signers).
 
+A required policy key must remain installed as a signer and unexpired. Removing
+that policy immediately revokes every signer whose limits require it. A
+`Signature::Policy` always invokes `policy__`, including for the policy's own
+`remove_signer` context.
+
 ```ts
 // This signer may only call C…token, and only alongside a passkey co-signer.
 const limits = new Map([["C…token", [SignerKey.Secp256r1(keyId)]]]);
@@ -457,6 +462,7 @@ Signer and signature expiration are **UNIX timestamps in seconds** (inclusive: v
 - **Deploy front-running remains an accepted residual.** Anyone who learns a `keyId` before deployment could place arbitrary code at the derived address. A signer getter check alone is not proof of ownership, because arbitrary code can answer it however the client expects. Since `0.16.0` `connectWallet` binds accepted code identity (`acceptedWasmHashes`) before reading any signer state, for any address that did not come from trusted local storage. A derivation-resolved address is still not authenticated by that check alone — see the [security analysis](docs/security-deterministic-deployer.md#accepted-residual-address-squatting).
 - **WebAuthn requires User Presence (UP), not User Verification (UV).** The contract requires the UP flag but not UV (biometric/PIN), so it stays compatible with non-UV authenticators. Enforce UV at the client/relayer layer if you need it.
 - **Value-moving policies need a cumulative cap or a co-signer.** A `Signature::Policy` carries no secret, so a per-transfer cap alone is trivially drained by repeated capped transfers. See the [contract interface](#contract-interface) and `sample-policy`.
+- **Existing `binver = 1.0.0` wallets require an authorized upgrade.** Installing the fixed WASM does not change deployed wallet instances. Upgrade each wallet to the canonical `binver = 1.0.1` hash in the current deployment manifest.
 
 ## Contract interface
 
@@ -491,7 +497,7 @@ contractId = sha256(XDR(HashIdPreimage::EnvelopeTypeContractId {
 - The canonical deployer keypair is `Keypair.fromRawEd25519Seed(sha256("kalepail"))`. It salts the deploy and signs the deploy authorization — it never pays fees and never controls the wallet — but its determinism is **load-bearing**: overriding `deploySource` changes every derived address and breaks keyId → wallet discovery.
 - The WASM hash is deliberately **not** in the preimage, so an `upgrade` never moves a wallet's address.
 
-This tuple is normative and must never change. See [`docs/deployments-testnet-2026-07-11.md`](./docs/deployments-testnet-2026-07-11.md) for the canonical WASM hashes, the deployer `G…` address, and the full derivation spec (including the deploy-front-running consequence in [Caveats](#caveats)).
+This tuple is normative and must never change. See [`docs/deployments-2026-08-19.md`](./docs/deployments-2026-08-19.md) for the canonical WASM hash, upload transactions, and upgrade guidance.
 
 ## Repository layout & development
 

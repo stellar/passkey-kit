@@ -2,6 +2,25 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.16.3 — 2026-08-19
+
+- **Fixed unauthorized policy-signer removal.** `Signature::Policy` now always
+  invokes `policy__`, including for the policy's own `remove_signer` context.
+  A secretless policy map entry can no longer bypass a rejecting policy.
+- **Required policies now fail closed.** A policy referenced by another
+  signer's limits must remain stored and unexpired. Removing the policy now
+  revokes every dependent signer instead of deleting its stored expiration
+  gate while leaving the delegate authorized.
+- **Added full-stack regressions.** AddressV2 authorization now proves that a
+  removed policy revokes its dependent delegate and preserves wallet balances.
+  The smart-wallet contract metadata is bumped to `binver = 1.0.1`.
+- **Published the fixed WASM.** Testnet and mainnet now contain
+  `502ea4e7bdb3ea99880941f1d35ceb67fb598692c0bb40f842ef9c9f17d58b58`.
+  Existing wallets require an authorized upgrade. See
+  [`docs/deployments-2026-08-19.md`](./docs/deployments-2026-08-19.md).
+- **Regenerated `passkey-kit-sdk@0.8.1`.** The generated contract specification
+  now matches the fixed `binver = 1.0.1` WASM.
+
 ## 0.16.2 — 2026-08-13
 
 - **Fixed signer discovery in browsers.** `MercuryIndexer.getSigners()` now

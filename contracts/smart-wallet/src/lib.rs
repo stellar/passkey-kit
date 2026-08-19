@@ -1,6 +1,6 @@
 #![no_std]
 
-use context::{is_sole_self_removal, verify_context};
+use context::verify_context;
 use signer::{
     get_signer_val_storage, is_durable, is_durable_admin, is_signer_expired, process_signer,
     signer_expiration, signer_limits, store_signer,
@@ -380,29 +380,19 @@ impl CustomAccountInterface for Contract {
             match signature {
                 Signature::Policy => {
                     if let SignerKey::Policy(policy) = &signer_key {
-                        // Self-removal exception: when the
-                        // ONLY context being authorized is this policy
-                        // signer's own removal, the policy is NOT consulted —
-                        // otherwise a rejecting (or broken) sole policy
-                        // signer could block its own removal forever.
-                        // Removing a policy signer only revokes that policy's
-                        // independent coverage authority (its role as a
-                        // required co-signer in other signers' limits is
-                        // storage-independent), so this is never an
-                        // escalation — it mirrors pass 1's "a signer may
-                        // always remove itself" rule. Any additional context
-                        // disables the skip.
-                        if !is_sole_self_removal(&env, &auth_contexts, &signer_key) {
-                            // Policy-as-signature sees the FULL context list
-                            // (a policy used inside another signer's limits
-                            // sees one context at a time). A rejecting policy
-                            // fails the whole authorization.
-                            PolicyClient::new(&env, policy).policy__(
-                                &env.current_contract_address(),
-                                &signer_key,
-                                &auth_contexts,
-                            );
-                        }
+                        // A policy signature carries no cryptographic material,
+                        // so every policy entry must consult `policy__`, including
+                        // sole self-removal. A rejecting policy therefore vetoes
+                        // its removal. Another wallet signer can still authorize
+                        // `remove_signer` without including this policy entry.
+                        // Policy-as-signature sees the FULL context list (a policy
+                        // used inside another signer's limits sees one context at
+                        // a time). A rejecting policy fails the whole auth.
+                        PolicyClient::new(&env, policy).policy__(
+                            &env.current_contract_address(),
+                            &signer_key,
+                            &auth_contexts,
+                        );
                     } else {
                         return Err(Error::SignatureKeyValueMismatch);
                     }

@@ -971,7 +971,7 @@ fn policy_as_limit_called_per_context() {
     let token = Address::generate(&env);
     let a = Ed25519Signer::new(1);
 
-    let (wallet, _) = register_wallet(
+    let (wallet, client) = register_wallet(
         &env,
         &a.signer(
             &env,
@@ -984,6 +984,13 @@ fn policy_as_limit_called_per_context() {
             SignerStorage::Persistent,
         ),
     );
+
+    client.mock_all_auths().add_signer(&Signer::Policy(
+        policy.clone(),
+        SignerExpiration(None),
+        empty_limits(&env),
+        SignerStorage::Temporary,
+    ));
 
     let payload = payload(&env, 7);
     let contexts = vec![
@@ -1243,11 +1250,11 @@ fn rejecting_policy_as_signature_fails_auth() {
 
 // --- Policy self-removal ---------------------------------------------------------
 
-/// A policy signer can ALWAYS self-remove, even when its `policy__` rejects:
-/// when the sole context is the policy's own `remove_signer`, pass 2 skips
-/// the policy consultation.
+/// A policy signer cannot authorize its own removal unless its `policy__`
+/// approves the removal context. `Signature::Policy` has no cryptographic
+/// material, so the wallet must never skip that policy consultation.
 #[test]
-fn rejecting_policy_can_self_remove() {
+fn rejecting_policy_cannot_self_remove() {
     let env = test_env();
     let policy = env.register(VetoPolicy, ());
     let policy_key = SignerKey::Policy(policy.clone());
@@ -1273,22 +1280,20 @@ fn rejecting_policy_can_self_remove() {
     let payload = payload(&env, 7);
     let contexts = vec![&env, remove_signer_context(&env, &wallet, &policy_key)];
 
-    assert_eq!(
-        check_auth(
-            &env,
-            &wallet,
-            &payload,
-            Signatures(map![&env, (policy_key.clone(), Signature::Policy)]),
-            &contexts,
-        ),
-        Ok(())
+    let result = check_auth(
+        &env,
+        &wallet,
+        &payload,
+        Signatures(map![&env, (policy_key.clone(), Signature::Policy)]),
+        &contexts,
     );
+    assert!(result.is_err(), "rejecting policy must veto removal");
 }
 
-/// The pass-2 skip applies ONLY when self-removal is the sole context: any
-/// additional context re-enables the policy consultation (which vetoes).
+/// A rejecting policy vetoes its removal even when another signer covers an
+/// additional context in the same authorization tree.
 #[test]
-fn policy_self_removal_skip_requires_sole_context() {
+fn rejecting_policy_vetoes_removal_with_extra_context() {
     let env = test_env();
     let policy = env.register(VetoPolicy, ());
     let policy_key = SignerKey::Policy(policy.clone());
@@ -1332,16 +1337,14 @@ fn policy_self_removal_skip_requires_sole_context() {
     );
     assert!(
         result.is_err(),
-        "extra context must re-enable the policy consultation: {result:?}"
+        "rejecting policy must veto removal: {result:?}"
     );
 }
 
-/// Self-removal skip × last-signer backstop: a SOLE (non-admin-shaped) rejecting
-/// policy can still AUTHORIZE its own removal (the consultation skip), but
-/// execution is rejected by the total-count guard — the skip is only ever
-/// consequential on wallets with two or more signers.
+/// A sole rejecting policy fails during authentication before the last-signer
+/// execution guard is relevant.
 #[test]
-fn sole_rejecting_policy_self_removal_blocked_by_backstop() {
+fn sole_rejecting_policy_self_removal_fails_auth() {
     use crate::{Contract, ContractClient};
 
     let env = test_env();
@@ -1349,8 +1352,7 @@ fn sole_rejecting_policy_self_removal_blocked_by_backstop() {
     let policy_key = SignerKey::Policy(policy.clone());
     let wallet = Address::generate(&env);
 
-    // Non-admin-shaped (empty limits): the ADMIN counter is 0, so only the
-    // total-count backstop stands between this removal and zero signers.
+    // Non-admin-shaped, with empty independent limits.
     env.register_at(
         &wallet,
         Contract,
@@ -1363,26 +1365,24 @@ fn sole_rejecting_policy_self_removal_blocked_by_backstop() {
     );
     let client = ContractClient::new(&env, &wallet);
 
-    // AUTH passes: pass-1 self-removal rule + pass-2 consultation skip.
+    // AUTH fails because pass 2 always consults policy__.
     let payload = payload(&env, 7);
     let contexts = vec![&env, remove_signer_context(&env, &wallet, &policy_key)];
-    assert_eq!(
-        check_auth(
-            &env,
-            &wallet,
-            &payload,
-            Signatures(map![&env, (policy_key.clone(), Signature::Policy)]),
-            &contexts,
-        ),
-        Ok(())
-    );
+    assert!(check_auth(
+        &env,
+        &wallet,
+        &payload,
+        Signatures(map![&env, (policy_key.clone(), Signature::Policy)]),
+        &contexts,
+    )
+    .is_err());
 
-    // EXECUTION rejects, full-stack.
+    // Full-stack execution rejects and preserves the signer.
     let root_invocation = remove_signer_invocation(&env, &wallet, &policy_key);
     let nonce = 31i64;
     let signature_expiration_ledger = env.ledger().sequence();
     let root_auth = soroban_sdk::xdr::SorobanAuthorizationEntry {
-        credentials: soroban_sdk::xdr::SorobanCredentials::Address(
+        credentials: soroban_sdk::xdr::SorobanCredentials::AddressV2(
             soroban_sdk::xdr::SorobanAddressCredentials {
                 address: wallet.clone().try_into().unwrap(),
                 nonce,
@@ -1394,12 +1394,10 @@ fn sole_rejecting_policy_self_removal_blocked_by_backstop() {
         ),
         root_invocation,
     };
-    assert_eq!(
-        client
-            .set_auths(&[root_auth])
-            .try_remove_signer(&policy_key),
-        Err(Ok(Error::LastSigner))
-    );
+    assert!(client
+        .set_auths(&[root_auth])
+        .try_remove_signer(&policy_key)
+        .is_err());
     assert!(client.get_signer(&policy_key).is_some());
 }
 
@@ -1449,8 +1447,8 @@ fn policy_signature_removing_other_key_still_consults_policy() {
     );
 }
 
-/// Full-stack self-removal: it executes end-to-end through
-/// address credentials, and the signer is gone afterwards.
+/// Full-stack policy self-removal must execute `policy__`. A rejecting policy
+/// makes address-credential authentication fail and remains installed.
 #[test]
 fn rejecting_policy_self_removal_full_stack() {
     let env = test_env();
@@ -1493,17 +1491,18 @@ fn rejecting_policy_self_removal_full_stack() {
         root_invocation,
     };
 
-    client.set_auths(&[root_auth]).remove_signer(&policy_key);
-    assert_eq!(client.get_signer(&policy_key), None);
+    assert!(client
+        .set_auths(&[root_auth])
+        .try_remove_signer(&policy_key)
+        .is_err());
+    assert!(client.get_signer(&policy_key).is_some());
 }
 
 /// Regression: a wallet whose SOLE signer is a
 /// REJECTING policy that is Persistent, non-expiring, and admin-capable via a
 /// wallet-self limits entry (`{wallet: None}`) must NOT be able to
-/// self-remove down to zero signers. The consultation skip still lets the
-/// AUTHORIZATION pass (the policy cannot veto its own sole removal), but the
-/// broadened durable-admin counter makes EXECUTION reject with
-/// `LastAdminSigner`.
+/// self-remove. Authentication now fails before the durable-admin execution
+/// guard is relevant.
 #[test]
 fn sole_admin_capable_policy_cannot_self_remove() {
     use crate::{Contract, ContractClient};
@@ -1528,23 +1527,19 @@ fn sole_admin_capable_policy_cannot_self_remove() {
     );
     let client = ContractClient::new(&env, &wallet);
 
-    // The AUTH layer accepts the self-removal (pass 1 self-removal rule +
-    // pass 2 consultation skip): the rejecting policy cannot block it.
+    // The AUTH layer consults and is rejected by policy__.
     let payload = payload(&env, 7);
     let contexts = vec![&env, remove_signer_context(&env, &wallet, &policy_key)];
-    assert_eq!(
-        check_auth(
-            &env,
-            &wallet,
-            &payload,
-            Signatures(map![&env, (policy_key.clone(), Signature::Policy)]),
-            &contexts,
-        ),
-        Ok(())
-    );
+    assert!(check_auth(
+        &env,
+        &wallet,
+        &payload,
+        Signatures(map![&env, (policy_key.clone(), Signature::Policy)]),
+        &contexts,
+    )
+    .is_err());
 
-    // ...but EXECUTION rejects: this signer is the wallet's last durable
-    // admin. Full-stack, through real address credentials.
+    // Full-stack execution rejects and preserves the signer.
     let root_invocation = remove_signer_invocation(&env, &wallet, &policy_key);
     let nonce = 11i64;
     let signature_expiration_ledger = env.ledger().sequence();
@@ -1562,12 +1557,10 @@ fn sole_admin_capable_policy_cannot_self_remove() {
         root_invocation,
     };
 
-    assert_eq!(
-        client
-            .set_auths(&[root_auth])
-            .try_remove_signer(&policy_key),
-        Err(Ok(Error::LastAdminSigner))
-    );
+    assert!(client
+        .set_auths(&[root_auth])
+        .try_remove_signer(&policy_key)
+        .is_err());
     assert!(client.get_signer(&policy_key).is_some());
 }
 
@@ -1617,6 +1610,12 @@ fn losing_candidate_does_not_invoke_policy() {
         SignerExpiration(None),
         contract_limits(&env, &token, Some(vec![&env, policy_key.clone()])),
         SignerStorage::Persistent,
+    ));
+    client.mock_all_auths().add_signer(&Signer::Policy(
+        policy.clone(),
+        SignerExpiration(None),
+        empty_limits(&env),
+        SignerStorage::Temporary,
     ));
 
     let payload = payload(&env, 7);
@@ -1732,7 +1731,7 @@ fn duplicated_policy_entry_invoked_once() {
     let token = Address::generate(&env);
     let a = Ed25519Signer::new(1);
 
-    let (wallet, _) = register_wallet(
+    let (wallet, client) = register_wallet(
         &env,
         &a.signer(
             &env,
@@ -1745,6 +1744,13 @@ fn duplicated_policy_entry_invoked_once() {
             SignerStorage::Persistent,
         ),
     );
+
+    client.mock_all_auths().add_signer(&Signer::Policy(
+        policy.clone(),
+        SignerExpiration(None),
+        empty_limits(&env),
+        SignerStorage::Temporary,
+    ));
 
     let payload = payload(&env, 7);
     let contexts = vec![&env, transfer_context(&env, &token, &wallet, 1)];
@@ -1887,6 +1893,46 @@ fn temporary_signer_auth_extends_ttl() {
         ttl_after, max_ttl,
         "pass 2 must extend the temporary signer entry to max TTL"
     );
+}
+
+/// A required policy must still be installed as a signer. Removing the policy
+/// must revoke every signer whose limits require it, instead of silently
+/// dropping the policy's stored expiration gate.
+#[test]
+fn missing_stored_policy_limit_key_rejects() {
+    let env = test_env();
+    let policy = env.register(CountingPolicy, ());
+    let token = Address::generate(&env);
+    let a = Ed25519Signer::new(1);
+
+    let (wallet, _) = register_wallet(
+        &env,
+        &a.signer(
+            &env,
+            SignerExpiration(None),
+            contract_limits(
+                &env,
+                &token,
+                Some(vec![&env, SignerKey::Policy(policy.clone())]),
+            ),
+            SignerStorage::Persistent,
+        ),
+    );
+
+    let payload = payload(&env, 7);
+    let contexts = vec![&env, transfer_context(&env, &token, &wallet, 1)];
+
+    assert_eq!(
+        check_auth(
+            &env,
+            &wallet,
+            &payload,
+            Signatures(map![&env, (a.signer_key(&env), a.sign(&env, &payload))]),
+            &contexts,
+        ),
+        Err(Ok(Error::MissingContext))
+    );
+    assert_eq!(policy_count(&env, &policy), 0);
 }
 
 /// An expired stored policy referenced in limits rejects the candidate

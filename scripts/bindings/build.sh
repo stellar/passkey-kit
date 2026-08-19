@@ -12,8 +12,8 @@
 set -euo pipefail
 
 # Canonical smart-wallet WASM hash — keep in sync with the deployments manifest
-# (docs/deployments-testnet-2026-07-11.md). Pinned Stellar CLI: 27.0.0.
-CANONICAL_HASH="fdefad64b96837147e1c333e51f537b696eab925e9f147e63d597c04e3c903f0"
+# (docs/deployments-2026-08-19.md). Pinned Stellar CLI: 27.1.0.
+CANONICAL_HASH="502ea4e7bdb3ea99880941f1d35ceb67fb598692c0bb40f842ef9c9f17d58b58"
 NETWORK="testnet"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

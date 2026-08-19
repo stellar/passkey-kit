@@ -108,8 +108,9 @@ pub trait PolicyInterface {
     ///
     /// When used inside another signer's limits, `policy__` is invoked only
     /// AFTER every side-effect-free requirement of that candidate has passed
-    /// (co-signer presence, stored-policy expiration), so a value-committing
-    /// policy is not charged for a candidate that was going to fail anyway.
+    /// (co-signer presence, required-policy presence and expiration), so a
+    /// value-committing policy is not charged for a candidate that was going
+    /// to fail anyway.
     /// A policy key duplicated within one required-keys list is invoked only
     /// once (deduplicated). Residual: with two or more DISTINCT policies in
     /// ONE required-keys list, an earlier policy's committed state survives a
@@ -121,12 +122,13 @@ pub trait PolicyInterface {
     ///
     /// ## Self-removal
     ///
-    /// `policy__` is NOT consulted when the only context being authorized is
-    /// this policy signer's own `remove_signer` on the wallet: a signer can
-    /// always self-remove, so a rejecting or broken policy cannot block its
-    /// own removal. Do not rely on `policy__` to keep the policy installed.
-    /// (Removal of a wallet's LAST signer — or last durable admin — is still
-    /// rejected at execution: `Error::LastSigner`/`Error::LastAdminSigner`.)
+    /// `policy__` is ALWAYS consulted for a `Signature::Policy` entry,
+    /// including when the only context is that policy signer's own
+    /// `remove_signer`. A rejecting policy therefore vetoes its own removal.
+    /// Another wallet signer may still authorize `remove_signer` without
+    /// including the policy entry. Removal of a wallet's LAST signer — or
+    /// last durable admin — is also rejected at execution:
+    /// `Error::LastSigner`/`Error::LastAdminSigner`.
     ///
     /// ## Do not make a policy your only admin
     ///
