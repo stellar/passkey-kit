@@ -2,6 +2,18 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.16.4 — 2026-08-19
+
+- **Documented the security status.** The public READMEs now state that the
+  repository code has not received an independent third-party security audit.
+  They also give general value, permission, recovery, and service-risk guidance.
+- **Added private reporting guidance.** `SECURITY.md` tells reporters how to
+  share suspected vulnerabilities without placing sensitive details in public
+  issues, pull requests, discussions, or chats.
+- **Published a curated binding README.** `passkey-kit-sdk@0.8.2` replaces the
+  generated placeholder README with package-specific usage and risk guidance.
+  Binding regeneration now preserves that README.
+
 ## 0.16.3 — 2026-08-19
 
 - **Fixed unauthorized policy-signer removal.** `Signature::Policy` now always

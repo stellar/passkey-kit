@@ -1,5 +1,8 @@
 # Passkey Kit demo
 
+> [!CAUTION]
+> This demo uses Stellar testnet and is not a production wallet. Do not configure it for mainnet or real-value assets.
+
 A Svelte 5 + Vite app that exercises the full `passkey-kit` client API against
 Stellar testnet smart wallets: passkey create / reconnect, add / update / remove
 signers (secp256r1 passkeys, Ed25519 keys, policy signers), Persistent and

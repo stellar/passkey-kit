@@ -5,8 +5,8 @@ A TypeScript SDK for creating and using **smart-wallet accounts on Stellar with 
 - **Client (`PasskeyKit`)** — runs in the browser: create/connect wallets, sign transactions, build signer-management transactions. Holds no secrets.
 - **Server (`PasskeyServer`)** — runs server-side: submits transactions through a relayer (fee sponsorship), plus convenience signer-discovery helpers over the keyless Mercury indexer. Holds the relayer secret.
 
-> [!IMPORTANT]
-> **Security.** Review the contract and SDK yourself before holding meaningful value, and read [Caveats](#caveats).
+> [!CAUTION]
+> **Unaudited software.** This repository's smart-wallet contract, SDKs, and relayer proxy have not received an independent third-party security audit. Defects can cause unauthorized transactions, loss of access, or permanent asset loss. Do not store or control assets you cannot afford to lose. Limit balances and signer permissions. Monitor wallets and maintain recovery and authorized upgrade paths. You use this software and related services at your own risk. The software has no warranty; see [LICENCE](./LICENCE), [Caveats](#caveats), and [SECURITY.md](./SECURITY.md).
 
 > [!NOTE]
 > **Looking for context rules, thresholds, and spending-limit policies?** [smart-account-kit](https://github.com/stellar/smart-account-kit) is a sibling SDK built on the audited [OpenZeppelin stellar-contracts](https://github.com/OpenZeppelin/stellar-contracts) account. It uses a different on-chain authorization model (context rules + an auth digest) than passkey-kit's flat `Signatures` map, so the two are not drop-in compatible — pick the model that fits your app.
@@ -455,8 +455,10 @@ Signer and signature expiration are **UNIX timestamps in seconds** (inclusive: v
 ## Caveats
 
 > [!WARNING]
-> These are inherent to the wallet model. The SDK does not guard against them — handle them in your app.
+> These risks are not exhaustive. Tests and reviews do not prove that the software has no defects.
 
+- **Limit value and authority.** Limit wallet balances, signer permissions, policy allowances, and relayer permissions. Monitor wallet activity. Keep independent recovery, submission, and authorized upgrade paths.
+- **Hosted services can fail or return stale data.** Do not treat relayer or indexer responses as authoritative chain state. Confirm security-sensitive state through Stellar RPC.
 - **Keep at least one durable admin signer.** The contract rejects any change that would remove or demote its last durable (`Persistent`, non-expiring) admin signer (`LastAdminSigner = 103`) or leave it without any durable signer (`LastSigner = 104`), so a wallet always retains one signer that cannot evict or expire. Signers outside that guard — `Temporary` storage or with an expiration — lapse on their own: add a replacement *before* removing or demoting an existing signer.
 - **The default deployer is a shared, public keypair — its secret is publicly derivable.** It salts deployment and signs only the CreateContractV2 authorization entry; the relayer supplies the envelope source, sequence, and fees. It never controls the wallet. Its determinism is load-bearing for discovery: overriding `deploySource` changes every derived address and breaks keyId → wallet lookup. Use a separate funded `restoreSource` for `restoreFootprint`; never fund the shared deployer. A third-party `bumpSequence` to `INT64_MAX` no longer blocks the current SDK because it never uses the shared deployer as an envelope source. Full analysis: [`docs/security-deterministic-deployer.md`](docs/security-deterministic-deployer.md).
 - **Deploy front-running remains an accepted residual.** Anyone who learns a `keyId` before deployment could place arbitrary code at the derived address. A signer getter check alone is not proof of ownership, because arbitrary code can answer it however the client expects. Since `0.16.0` `connectWallet` binds accepted code identity (`acceptedWasmHashes`) before reading any signer state, for any address that did not come from trusted local storage. A derivation-resolved address is still not authenticated by that check alone — see the [security analysis](docs/security-deterministic-deployer.md#accepted-residual-address-squatting).
@@ -518,6 +520,7 @@ pnpm verify:bindings  # assert the committed bindings match the canonical WASM
 ```
 
 - **[CHANGELOG.md](./CHANGELOG.md)** — the v1 overhaul, by component.
+- **[SECURITY.md](./SECURITY.md)** — supported versions and private vulnerability reporting.
 - **[docs/migration-v1.md](./docs/migration-v1.md)** — upgrading from 0.12.x, with Before/After and a gap analysis.
 - **[docs/releasing.md](./docs/releasing.md)** — the dependency-ordered publish flow.
 

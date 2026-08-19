@@ -1,5 +1,8 @@
 # passkey-kit relayer-proxy
 
+> [!CAUTION]
+> This Worker code has not received an independent third-party security audit. Treat it as production security infrastructure. Restrict its permissions, monitor it, and keep an independent submission path. You deploy and operate it at your own risk.
+
 A fail-closed Cloudflare Worker in front of OpenZeppelin Relayer Channels. The
 browser sends transaction material without receiving a Channels API key; the
 Worker validates the request before lazily minting and storing a per-IP key.

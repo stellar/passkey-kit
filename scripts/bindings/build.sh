@@ -4,9 +4,9 @@
 #
 # The canonical hash is THE source of truth (docs/deployments-testnet-*.md). The
 # WASM is fetched by hash from testnet, bindings are generated to a temp dir with
-# the pinned Stellar CLI, and only the generated `src/index.ts` (+ README) are
-# copied into the package — the B1 packaging (package.json, tsconfig, dist build)
-# is preserved. NEVER hand-edit the generated bindings; add post-gen steps here.
+# the pinned Stellar CLI, and only the generated `src/index.ts` is copied into
+# the package. The curated README and the B1 packaging are preserved. NEVER
+# hand-edit the generated bindings; add post-gen steps here.
 #
 # Usage: bash scripts/bindings/build.sh
 set -euo pipefail
@@ -18,7 +18,6 @@ NETWORK="testnet"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PKG_SRC="$ROOT/packages/passkey-kit-sdk/src/index.ts"
-PKG_README="$ROOT/packages/passkey-kit-sdk/README.md"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -34,15 +33,11 @@ if [ "$ACTUAL" != "$CANONICAL_HASH" ]; then
 fi
 
 echo "Generating TypeScript bindings…"
-# The CLI derives the generated README's package name from the output-dir
-# basename; keep it "pks-gen" so the released README name stays stable across
-# regens (verify.sh compares only the name-independent spec base64).
 stellar contract bindings typescript --wasm "$TMP/smart-wallet.wasm" \
   --overwrite --output-dir "$TMP/pks-gen" >/dev/null
 
-echo "Applying post-gen patches (copy generated spec, preserve packaging)…"
+echo "Applying post-gen patches (copy generated spec, preserve docs and packaging)…"
 cp "$TMP/pks-gen/src/index.ts" "$PKG_SRC"
-cp "$TMP/pks-gen/README.md" "$PKG_README"
 
 echo "✓ Regenerated passkey-kit-sdk from canonical WASM ${CANONICAL_HASH}"
 echo "  Run 'pnpm --filter passkey-kit-sdk run build' to rebuild dist."

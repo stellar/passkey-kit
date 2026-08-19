@@ -12,9 +12,9 @@ The versions checked into each `package.json` are authoritative; `npm view` is t
 
 | Package | Checked-in version |
 |---|---|
-| `passkey-kit-sdk` | `0.8.1` |
+| `passkey-kit-sdk` | `0.8.2` |
 | `sac-sdk` | `0.4.4` |
-| `passkey-kit` | `0.16.3` (policy-removal authorization fix — see [CHANGELOG](../CHANGELOG.md)) |
+| `passkey-kit` | `0.16.4` (security-status documentation — see [CHANGELOG](../CHANGELOG.md)) |
 
 > [!IMPORTANT]
 > Publishing is an **outward-facing, user-gated** step. Bump the versions intentionally, and have the person with npm access run the publish commands (they hold the credentials and the OTP device).
@@ -39,10 +39,10 @@ npm view passkey-kit version
 
 ## 2. Regenerate & verify bindings
 
-Regenerate the bindings whenever the smart-wallet or SAC contract interface changes. Generation goes through `scripts/bindings/build.sh`; it regenerates directly into `packages/` from the canonical WASM and applies the post-generation patch pass (package README, `package.json` peer-demotion, `tsconfig`).
+Regenerate the bindings whenever the smart-wallet contract interface changes. Generation uses `scripts/bindings/build.sh` and the canonical WASM. The script updates `src/index.ts` and preserves the curated package README and packaging files.
 
 ```bash
-pnpm run bindings:regen     # regenerate packages/*/src from the canonical WASM
+pnpm run bindings:regen     # regenerate passkey-kit-sdk/src from the canonical WASM
 ```
 
 Then prove the committed bindings match the canonical on-chain WASM:
