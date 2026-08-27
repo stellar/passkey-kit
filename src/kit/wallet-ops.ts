@@ -28,7 +28,9 @@ import {
   type SignerLimits as SDKSignerLimits,
   type SignerVal,
 } from "passkey-kit-sdk";
+import { Address, xdr } from "@stellar/stellar-sdk";
 import base64url from "../base64url.js";
+import { PasskeyKitErrorCode, ValidationError } from "../errors.js";
 import { SignerStore, type SignerKey, type SignerLimits } from "../types.js";
 import { readContractData } from "../rpc-data.js";
 import { signerKeyToScVal, SIGNER_VAL_UDT } from "./auth-payload.js";
@@ -170,18 +172,79 @@ export function buildEd25519SignerTx(
   );
 }
 
-export function buildPolicySignerTx(
+/** Options for {@link buildPolicySignerTx}. */
+export interface PolicySignerTxOptions {
+  /**
+   * Allow the policy's `install` hook to add wallet-authorized sub-invocations
+   * to the `add_signer` auth entry. Default `false`: the build throws a
+   * {@link ValidationError} if the simulated entry carries any sub-invocation.
+   */
+  allowInstallSubInvocations?: boolean;
+}
+
+export async function buildPolicySignerTx(
   deps: WalletWriteDeps,
   fn: SignerFn,
   policy: string,
   limits: SignerLimits,
   store: SignerStore,
-  expiration?: number
+  expiration?: number,
+  options?: PolicySignerTxOptions
 ): Promise<WalletTx> {
-  return deps.wallet[fn](
+  const tx = await deps.wallet[fn](
     { signer: buildPolicySigner(policy, limits, store, expiration) },
     { timeoutInSeconds: deps.timeoutInSeconds }
   );
+
+  // `add_signer` on a policy runs the policy's `install` hook while the
+  // wallet's authorization is live. Anything the hook `require_auth`s against
+  // the wallet is recorded by simulation as a sub-invocation of the
+  // `add_signer` root, and a single passkey signature would cover it. A
+  // legitimate install needs no wallet-authorized calls, so refuse by default.
+  if (fn === "add_signer" && !options?.allowInstallSubInvocations) {
+    assertNoInstallSubInvocations(tx, deps.wallet.options.contractId, policy);
+  }
+
+  return tx;
+}
+
+function assertNoInstallSubInvocations(
+  tx: WalletTx,
+  contractId: string,
+  policy: string
+): void {
+  const auth: xdr.SorobanAuthorizationEntry[] =
+    (tx as { simulationData?: { result?: { auth?: xdr.SorobanAuthorizationEntry[] } } })
+      .simulationData?.result?.auth ?? [];
+
+  for (const entry of auth) {
+    const root = entry.rootInvocation();
+    const fn = root.function();
+    if (fn.switch().name !== "sorobanAuthorizedFunctionTypeContractFn") continue;
+    const args = fn.contractFn();
+    if (Address.fromScAddress(args.contractAddress()).toString() !== contractId) continue;
+    if (args.functionName().toString() !== "add_signer") continue;
+
+    const subs = root.subInvocations().map(describeInvocation);
+    if (subs.length > 0) {
+      throw new ValidationError(
+        `Policy ${policy} install hook requests wallet-authorized sub-invocations ` +
+          `(${subs.join(", ")}). Refusing to build add_signer. Pass ` +
+          `allowInstallSubInvocations: true to override.`,
+        PasskeyKitErrorCode.INVALID_INPUT,
+        { policy, subInvocations: subs }
+      );
+    }
+  }
+}
+
+function describeInvocation(inv: xdr.SorobanAuthorizedInvocation): string {
+  const fn = inv.function();
+  if (fn.switch().name !== "sorobanAuthorizedFunctionTypeContractFn") {
+    return fn.switch().name;
+  }
+  const args = fn.contractFn();
+  return `${Address.fromScAddress(args.contractAddress()).toString()}.${args.functionName().toString()}`;
 }
 
 export function buildRemoveSignerTx(

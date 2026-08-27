@@ -53,7 +53,7 @@ import {
 } from "./managers/index.js";
 import { resolveDeployer } from "./kit/deploy-ops.js";
 import { contractInstanceExists } from "./rpc-data.js";
-import type { WalletTx } from "./kit/wallet-ops.js";
+import type { PolicySignerTxOptions, WalletTx } from "./kit/wallet-ops.js";
 
 /** Configuration for a {@link PasskeyKit} client. */
 export interface PasskeyKitConfig {
@@ -538,13 +538,19 @@ export class PasskeyKit {
   ): Promise<WalletTx> {
     return this.signerManager.updateEd25519(publicKey, limits, store, expiration);
   }
+  /**
+   * Add a policy signer. Throws a `ValidationError` if the policy's `install`
+   * hook adds wallet-authorized sub-invocations to the auth entry, unless
+   * `options.allowInstallSubInvocations` is set.
+   */
   addPolicy(
     policy: string,
     limits: SignerLimits,
     store: SignerStore,
-    expiration?: number
+    expiration?: number,
+    options?: PolicySignerTxOptions
   ): Promise<WalletTx> {
-    return this.signerManager.addPolicy(policy, limits, store, expiration);
+    return this.signerManager.addPolicy(policy, limits, store, expiration, options);
   }
   updatePolicy(
     policy: string,

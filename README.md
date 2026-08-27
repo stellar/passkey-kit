@@ -233,7 +233,7 @@ Each method builds an `AssembledTransaction` (`WalletTx`) that wraps one contrac
 | `updateSecp256r1(keyId, limits, store, expiration?)` | `update_signer` | Update a passkey signer's limits/storage/expiration. The public key is re-read from the ledger, never caller-supplied. |
 | `addEd25519(publicKey, limits, store, expiration?)` | `add_signer` | Add an Ed25519 signer (`publicKey` = `G…`). |
 | `updateEd25519(publicKey, limits, store, expiration?)` | `update_signer` | Update an Ed25519 signer. |
-| `addPolicy(policy, limits, store, expiration?)` | `add_signer` | Add a policy signer (`policy` = `C…`). Invokes the policy's `install` hook. |
+| `addPolicy(policy, limits, store, expiration?, options?)` | `add_signer` | Add a policy signer (`policy` = `C…`). Invokes the policy's `install` hook. Throws `ValidationError` if the hook adds wallet-authorized sub-invocations to the auth entry, unless `options.allowInstallSubInvocations` is set. |
 | `updatePolicy(policy, limits, store, expiration?)` | `update_signer` | Update a policy signer. |
 | `remove(signerKey)` | `remove_signer` | Remove a signer. A policy entry must pass its own `policy__` check. |
 | `upgrade(newWasmHash)` | `upgrade` | Replace the wallet's WASM (`Buffer`/`Uint8Array`, 32 bytes). |
@@ -478,7 +478,7 @@ The wallet is a Soroban smart contract (`soroban-sdk 27`, `wasm32v1-none`). Ever
 
 **Auth (`__check_auth`):** a flat `Signatures` map (`SignerKey → Signature`) signed over the plain signature payload. Pass 1 checks every requested context is covered by some permitted, unexpired signer; pass 2 verifies **every** entry in the map (existence, expiration, crypto/policy). Include only the signatures you need.
 
-**Policy lifecycle:** policy signers get an `install(wallet)` hook on add (a hard call — a panic aborts the add) and a permissionless `uninstall(wallet)` self-clean entrypoint. `policy__` is publicly callable — stateful policies must authenticate the caller (`source.require_auth()`).
+**Policy lifecycle:** policy signers get an `install(wallet)` hook on add (a hard call — a panic aborts the add) and a permissionless `uninstall(wallet)` self-clean entrypoint. `install` runs while the adding signer's authorization is live: anything the hook `require_auth`s against the wallet becomes a sub-invocation of the `add_signer` auth entry, covered by the adder's signature. The new policy's `SignerLimits` do not bound this. Only add policy contracts you trust. `addPolicy` refuses such entries by default. `policy__` is publicly callable — stateful policies must authenticate the caller (`source.require_auth()`).
 
 **Events** (`#[contractevent]`, SEP-48 schema in the WASM): `signer_added` · `signer_updated` · `signer_removed` · `upgraded`. These replace the legacy `("sw_v1", …)` tuple events; indexers consume them directly.
 

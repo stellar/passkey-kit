@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { Keypair } from "@stellar/stellar-sdk";
+import { Address, Keypair, xdr } from "@stellar/stellar-sdk";
 import type { Spec as ContractSpec } from "@stellar/stellar-sdk/contract";
 import { Client as PasskeyClient, type SignerVal } from "passkey-kit-sdk";
 import { SignerManager, type SignerManagerDeps } from "./signer-manager.js";
 import { SignerKey, SignerStore } from "../types.js";
-import { SignerNotFoundError, WalletNotConnectedError } from "../errors.js";
+import { SignerNotFoundError, ValidationError, WalletNotConnectedError } from "../errors.js";
 import { SIGNER_VAL_UDT } from "../kit/auth-payload.js";
 import base64url from "../base64url.js";
 
@@ -88,6 +88,77 @@ describe("SignerManager signer writes", () => {
     expect(wallet.remove_signer).toHaveBeenCalledTimes(1);
     const [{ signer_key }] = wallet.remove_signer.mock.calls[0]!;
     expect(signer_key.tag).toBe("Ed25519");
+  });
+
+  const TOKEN = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+
+  /** A simulated `add_signer` auth entry with the given sub-invocations. */
+  function addSignerAuthTx(subInvocations: xdr.SorobanAuthorizedInvocation[]) {
+    const invocation = (contract: string, name: string, subs: xdr.SorobanAuthorizedInvocation[]) =>
+      new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+          new xdr.InvokeContractArgs({
+            contractAddress: Address.fromString(contract).toScAddress(),
+            functionName: name,
+            args: [],
+          })
+        ),
+        subInvocations: subs,
+      });
+    const entry = new xdr.SorobanAuthorizationEntry({
+      credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
+      rootInvocation: invocation(CONTRACT, "add_signer", subInvocations),
+    });
+    return {
+      simulationData: { result: { auth: [entry] } },
+      transfer: () => invocation(TOKEN, "transfer", []),
+    };
+  }
+
+  it("addPolicy builds when the install hook adds no sub-invocations", async () => {
+    const tx = addSignerAuthTx([]);
+    const { deps, wallet } = makeDeps();
+    wallet.add_signer = vi.fn(async () => tx as never);
+    const manager = new SignerManager(deps);
+
+    await expect(manager.addPolicy(CONTRACT, undefined, SignerStore.Persistent)).resolves.toBe(tx);
+  });
+
+  it("addPolicy refuses an add_signer entry whose install hook piggybacks a sub-invocation", async () => {
+    const tx = addSignerAuthTx([]);
+    tx.simulationData.result.auth[0]!.rootInvocation().subInvocations([tx.transfer()]);
+    const { deps, wallet } = makeDeps();
+    wallet.add_signer = vi.fn(async () => tx as never);
+    const manager = new SignerManager(deps);
+
+    const err = await manager.addPolicy(CONTRACT, undefined, SignerStore.Persistent).catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.message).toContain(`${TOKEN}.transfer`);
+    expect(err.context).toEqual({ policy: CONTRACT, subInvocations: [`${TOKEN}.transfer`] });
+  });
+
+  it("addPolicy allows sub-invocations with allowInstallSubInvocations", async () => {
+    const tx = addSignerAuthTx([]);
+    tx.simulationData.result.auth[0]!.rootInvocation().subInvocations([tx.transfer()]);
+    const { deps, wallet } = makeDeps();
+    wallet.add_signer = vi.fn(async () => tx as never);
+    const manager = new SignerManager(deps);
+
+    await expect(
+      manager.addPolicy(CONTRACT, undefined, SignerStore.Persistent, undefined, {
+        allowInstallSubInvocations: true,
+      })
+    ).resolves.toBe(tx);
+  });
+
+  it("updatePolicy does not run the install sub-invocation guard", async () => {
+    const tx = addSignerAuthTx([]);
+    tx.simulationData.result.auth[0]!.rootInvocation().subInvocations([tx.transfer()]);
+    const { deps, wallet } = makeDeps();
+    wallet.update_signer = vi.fn(async () => tx as never);
+    const manager = new SignerManager(deps);
+
+    await expect(manager.updatePolicy(CONTRACT, undefined, SignerStore.Persistent)).resolves.toBe(tx);
   });
 
   it("throws WalletNotConnectedError when no wallet is connected", () => {

@@ -163,6 +163,16 @@ pub trait PolicyInterface {
     /// and authenticates the wallet. This is a HARD call — a panic aborts the
     /// `add_signer`, so a policy can legitimately refuse to be installed.
     /// Set up any per-wallet state here.
+    ///
+    /// SECURITY: this hook runs while the authorization of the signer that
+    /// performs the `add_signer` is live. Any `require_auth` the hook raises
+    /// against the wallet (e.g. a token transfer) is recorded by simulation
+    /// as a sub-invocation of the `add_signer` auth entry, and the adding
+    /// signer's single signature covers it. The new policy's `SignerLimits`
+    /// do NOT bound this hook — they bound only what the policy can authorize
+    /// on its own, later. Only add policy contracts you trust. Wallet clients
+    /// should refuse to sign an `add_signer` entry that carries
+    /// sub-invocations (passkey-kit's `addPolicy` does so by default).
     fn install(env: Env, wallet: Address);
     /// PERMISSIONLESS self-clean entrypoint. The wallet does
     /// NOT call this on removal; anyone may call it at any time. An

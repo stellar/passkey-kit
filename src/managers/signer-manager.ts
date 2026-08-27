@@ -25,7 +25,7 @@ import {
   type SignerLimits,
 } from "../types.js";
 import base64url from "../base64url.js";
-import { SignerNotFoundError, WalletNotConnectedError } from "../errors.js";
+import { SignerNotFoundError, type ValidationError, WalletNotConnectedError } from "../errors.js";
 import {
   signAuthEntry as signAuthEntryOp,
   sign as signOp,
@@ -34,6 +34,7 @@ import {
 import {
   buildEd25519SignerTx,
   buildPolicySignerTx,
+  type PolicySignerTxOptions,
   buildRemoveSignerTx,
   buildSecp256r1SignerTx,
   buildUpgradeTx,
@@ -170,13 +171,20 @@ export class SignerManager {
     return buildEd25519SignerTx(this.writeDeps(), "update_signer", publicKey, limits, store, expiration);
   }
 
+  /**
+   * Build an `add_signer` transaction for a policy. Throws a
+   * {@link ValidationError} if the policy's `install` hook adds
+   * wallet-authorized sub-invocations to the auth entry, unless
+   * `options.allowInstallSubInvocations` is set.
+   */
   addPolicy(
     policy: string,
     limits: SignerLimits,
     store: SignerStore,
-    expiration?: number
+    expiration?: number,
+    options?: PolicySignerTxOptions
   ): Promise<WalletTx> {
-    return buildPolicySignerTx(this.writeDeps(), "add_signer", policy, limits, store, expiration);
+    return buildPolicySignerTx(this.writeDeps(), "add_signer", policy, limits, store, expiration, options);
   }
 
   updatePolicy(
