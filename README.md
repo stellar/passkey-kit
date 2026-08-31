@@ -11,9 +11,6 @@ A TypeScript SDK for creating and using **smart-wallet accounts on Stellar with 
 > [!NOTE]
 > **Looking for context rules, thresholds, and spending-limit policies?** [smart-account-kit](https://github.com/stellar/smart-account-kit) is a sibling SDK built on the audited [OpenZeppelin stellar-contracts](https://github.com/OpenZeppelin/stellar-contracts) account. It uses a different on-chain authorization model (context rules + an auth digest) than passkey-kit's flat `Signatures` map, so the two are not drop-in compatible — pick the model that fits your app.
 
-> [!NOTE]
-> This repository is not in scope for the Stellar Development Foundation bug bounty program. Vulnerabilities found in this repo are not eligible for rewards.
-
 ## Contents
 
 - [Installation](#installation)
@@ -533,3 +530,7 @@ pnpm verify:bindings  # assert the committed bindings match the canonical WASM
 
 - [Super Peach](https://github.com/kalepail/superpeach) — a real-world implementation example.
 - [Stellar Developers Discord `#passkeys`](https://discord.gg/stellardev) — questions and showcase.
+
+---
+
+> **Note:** This repository is not in scope for the Stellar Development Foundation bug bounty program. Vulnerabilities found in this repo are not eligible for rewards.
