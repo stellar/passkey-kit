@@ -12,7 +12,7 @@ Do not store or control assets you cannot afford to lose. Limit balances and per
 
 Only the latest npm releases and the canonical smart-wallet WASM receive security fixes.
 
-The current deployment manifest in [`docs/`](./docs/) identifies the canonical WASM. Existing wallet instances do not upgrade automatically.
+The current [`deployment manifest`](./docs/deployments-2026-09-01.md) identifies the canonical WASM. Existing wallet instances do not upgrade automatically.
 
 ## Report a vulnerability privately
 

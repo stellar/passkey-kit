@@ -74,9 +74,9 @@ All lists are comma-separated. Empty security allowlists fail closed.
 
 `API_KEY_DO` binds `ApiKeyStore`; `RATE_LIMIT_DO` binds
 `RequestRateLimiter`. `wrangler.toml` includes both SQLite Durable Object
-migrations. The production environment intentionally leaves origins, wallet
-hashes, deployers, and RPC empty so a mainnet deploy cannot sponsor anything
-until operators explicitly populate those values.
+migrations. The checked-in worker is testnet-only.
+It pins the demo origin, the canonical wallet hash, and the shared deployer.
+No mainnet environment exists in this file.
 
 For local development, copy `.dev.vars.example` to `.dev.vars` and adjust the
 public allowlists. Never add a Channels key; the Worker mints keys through

@@ -17,8 +17,10 @@ Fresh-device connection now needs `getWalletCandidates` from a schema-2 indexer.
 The SDK rejects derivation-only discovery.
 It also rejects incomplete, stale, or ambiguous indexer results.
 
-The indexer returns every candidate with `birthWasmHash`,
-`creationTransactionHash`, and `creationLedger`.
+The SDK requires `birthWasmHash`, `creationTransactionHash`, and `creationLedger`.
+Hosted Mercury lookup does not return these fields yet.
+Fresh-device `connectWallet` fails closed until Mercury deploys schema 2.
+Verified local records still connect.
 The SDK verifies these claims through RPC or Horizon history.
 
 ## 0.15.0: shared deploy and restore sources
@@ -219,7 +221,10 @@ const kit = new PasskeyKit({ /* … */, storage: new IndexedDBStorage() });
 - `PasskeyServer.getWalletCandidates` replaces `getContractId` and `getContractIds`.
 - The new method returns a complete lookup with immutable birth claims.
 - A `SignerIndexer` abstraction resolved by the keyless `MercuryIndexer` — exported from the main `passkey-kit` entry (browser-safe; no token), alongside the browser-safe types + `lookupWithRetry`.
-- **Live Mercury discovery is on by default** via Mercury's hosted, **keyless** passkey-indexer (both networks, full history, both signer generations). `MercuryConfig` collapsed to an optional `{ url? }`; the old `projectName`/`jwt`/`apiKey` and the interim `zephyrExecuteConfirmed` gate are gone. Resolve per network with `MercuryIndexer.forNetwork(...)`.
+- Mercury signer enumeration is live through its hosted, **keyless** passkey-indexer.
+- As of 2026-09-01, schema-2 reverse lookup is not deployed.
+- Fresh-device connection fails closed until the hosted lookup returns complete birth claims.
+- `MercuryConfig` is an optional `{ url? }`. Resolve it with `MercuryIndexer.forNetwork(...)`.
 
 ## Packaging & imports
 
@@ -249,22 +254,25 @@ An explicit accounting of capabilities the pre-1.0 version had that v1 changes o
 
 | Old capability | v1 status | What to do instead |
 |---|---|---|
-| `connectWallet({ walletPublicKey })` — resolve/connect a wallet by an Ed25519 `G…` key | **Removed.** `connectWallet` is passkey-ownership-based by design. | Use `server.getWalletCandidates({ publicKey })` for a reverse lookup. Operate on the returned address without passkey connection. |
+| `connectWallet({ walletPublicKey })` — resolve/connect a wallet by an Ed25519 `G…` key | **Removed.** `connectWallet` is passkey-ownership-based by design. | Use `server.getWalletCandidates({ publicKey })` for candidate data. Verify each address independently before use. |
 | `sign(xdrString \| Tx)` — sign a raw XDR string or `Tx` | **Removed** (lossy fallback). | `AssembledTransaction.fromXDR(...)` first, then `sign(txn)`. |
 | Per-call `rpId` on `sign` / `connectWallet` | **Moved to the constructor.** | Set `rpId` once on `new PasskeyKit({ rpId })`. |
-| **Live signer discovery via Mercury** (`getSigners` / `getWalletCandidates`) | **Live.** Mercury supplies candidates and immutable birth claims. | Enumerate with `server.getSigners(contractId)`. Reverse lookup with `server.getWalletCandidates({ keyId \| publicKey \| policy })`. Fresh-device connection fails without a complete indexer response. |
+| **Signer discovery via Mercury** (`getSigners` / `getWalletCandidates`) | Signer enumeration is live. Schema-2 birth claims are pending. | Use `server.getSigners(contractId)`. Treat an incomplete candidate lookup as unavailable. |
 | Legacy `("sw_v1", …)` tuple events | **Replaced** by typed `#[contractevent]` events. | Consume the new `signer_added`/`signer_updated`/`signer_removed`/`upgraded` schema; Mercury's hosted passkey-indexer already does (and still indexes the legacy tuples for older wallets). |
 | Raw-TypeScript package (import internal source files) | **Removed** — ships compiled `dist/`. | Use the public entry points (`.`, `./storage`, `./server`). |
 
-**Net:** v1 is a superset of the old *contract* surface (adds `upgrade` wrapping + `get_signer`), and a superset of the old *SDK* surface except for the three intentional API-shape changes above — and server-side discovery is now backed by Mercury's keyless hosted passkey-indexer on both networks (`getSigners` returns the richer `WalletSigner` shape instead of the old `IndexedSigner` row).
+The v1 contract and SDK intentionally remove unsupported legacy paths.
+Mercury supplies hosted signer enumeration on both networks.
+Schema-2 reverse lookup remains pending.
 
 ## Contract-side changes
 
 If you build against the contract directly (not just the SDK):
 
-- `__constructor(signer)` is the only init path (the `init` flag and un-authed first-`add_signer` are gone).
+- `__constructor(signer, proof)` is the only init path. Secp256r1 requires `Some(proof)` with the GENESIS purpose.
+- Ed25519 and Policy require `None` for `proof`. Every first signer must be a durable admin.
 - `update_contract_code` → `upgrade(new_wasm_hash)`; new `get_signer(signer_key) -> Option<SignerVal>` view.
-- `SignerExpiration(Option<u64>)` is a UNIX timestamp; `SignerLimits::Some(empty)` is fail-closed; errors renumbered 100–129; events are `#[contractevent]` structs; policies gain `install`/`uninstall`.
+- `SignerExpiration(Option<u64>)` is a UNIX timestamp; `SignerLimits::Some(empty)` is fail-closed; errors use 100–133 with gaps; events are `#[contractevent]` structs; policies gain `install`/`uninstall`.
 
 See the [CHANGELOG](../CHANGELOG.md#contract-smart-wallet-soroban-sdk-27) for the full list and [`contracts/smart-wallet-interface/src/`](../contracts/smart-wallet-interface/src) for the canonical interface.
 
@@ -274,7 +282,7 @@ See the [CHANGELOG](../CHANGELOG.md#contract-smart-wallet-soroban-sdk-27) for th
 |---|---|---|
 | Submission failure | `{ success: false, error: string }` | `{ success: false, error: PasskeyKitError }` |
 | Any non-submission failure | plain `Error` / failure object | typed `PasskeyKitError` subclass (thrown) |
-| `connectWallet` with a keyId not on the wallet | trusted the derived/looked-up address | throws `WalletOwnershipError` (verifies the keyId is a live signer) |
+| `connectWallet` with a keyId not on the wallet | trusted the derived/looked-up address | throws `WalletOwnershipError` unless every birth, code, signer, record, and assertion check succeeds. |
 | Empty `SignerLimits` map | unlimited | no permissions (fail-closed) |
 | Signer/signature expiration unit | ledger sequence | UNIX timestamp (seconds) |
 | WebAuthn challenge | fixed string | random 32 bytes |

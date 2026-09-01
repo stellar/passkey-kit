@@ -1,7 +1,7 @@
 # Constructor-only Secp256r1 signer provenance
 
-Status: design of record for the next release.
-The contract, SDK, and indexer patches are in progress.
+Status: implemented in `passkey-kit@0.17.0` and smart-wallet `binver = 1.1.0`.
+The hosted Mercury schema-2 response remains pending on 2026-09-01.
 This design supersedes the factory design and all migration designs.
 It does not replace deployer hardening in `mainnet-hardening.md`.
 
@@ -10,7 +10,7 @@ It does not replace deployer hardening in `mainnet-hardening.md`.
 An untrusted wallet candidate must not become the connected wallet.
 The check must survive arbitrary birth code and a later upgrade to accepted code.
 The check must also separate a copied credential id from the real passkey.
-The design must close the reported wallet-binding and fund-redirection path.
+The design must prevent unverified wallet binding and fund redirection.
 
 ## Threat facts
 
@@ -18,11 +18,10 @@ The shared deployer secret is public.
 Anyone can deploy any WASM at an unused derived address.
 The address preimage is the network, the deployer address, and `sha256(keyId)`.
 A credential id is opaque and does not bind a public key.
-An attacker can read pending deployment transactions.
-An attacker can copy constructor arguments from a pending deployment.
-An attacker can add signer state with custom birth code.
-An attacker can then install accepted wallet code with `update_current_contract_wasm`.
-An attacker cannot produce a signature from the victim's passkey.
+Pending deployment data is public.
+Current wallet code can differ from wallet birth code.
+Signer state alone does not prove wallet birth.
+A third party cannot produce a signature from the user's passkey.
 
 ## Design overview
 
@@ -50,12 +49,12 @@ The WebAuthn assertion carries the base64url challenge.
 
 ## Constructor requirements
 
-`__constructor(signer, proof)` verifies the GENESIS proof before it writes signer state.
-A failed proof aborts the deployment transaction.
+`__constructor(signer, proof)` is the only init path.
+A Secp256r1 signer requires `Some(proof)` with the GENESIS purpose.
+An Ed25519 or Policy signer requires `None` for `proof`.
+A failed constructor aborts the deployment transaction.
 The failed deployment does not occupy the contract address.
-The constructor also requires at least one durable admin.
-A durable admin is a Persistent signer with no expiration.
-The constructor rejects a genesis signer without that property.
+The first signer must be a durable admin.
 
 ## add_secp256r1
 
@@ -103,12 +102,9 @@ Two or more passing candidates raise `WalletAmbiguousError`.
 
 ## Birth verification
 
-Birth verification is load-bearing.
-Evil birth code can copy a pending constructor proof.
-It can add an attacker signer.
-It can then upgrade to accepted code.
-The copied proof, the copied signer, and the fresh assertion all agree in that case.
-Only the creation transaction distinguishes that wallet from the real wallet.
+Birth verification is required.
+Current code does not prove which code created a wallet.
+The creation transaction supplies the immutable birth evidence.
 
 The indexer returns `birthWasmHash`, `creationTransactionHash`, and `creationLedger` per candidate.
 These fields are claims.
@@ -146,10 +142,11 @@ Local trust never skips a check.
 
 No derivation-only connection exists.
 Derivation supplies a candidate address, never proof of birth.
-A candidate without indexer birth data cannot connect.
+A candidate without verified birth data cannot connect.
+Local storage counts only after `confirmWalletCreation` or a prior verified connection.
 No `allowUnverifiedLegacy` flag exists.
 No `bind_secp256r1` path exists.
-No existing-wallet migration is required for this beta release.
+No existing-wallet migration exists for this release.
 Pre-release wallets cannot pass the accepted-birth check.
 
 ## Residual risks
@@ -158,22 +155,21 @@ Address occupancy remains a denial-of-service risk.
 Anyone can occupy an unused derived address with the public deployer.
 The victim's own deployment then fails visibly.
 The victim can recover with a new credential.
-A front-runner that copies constructor arguments verbatim creates the victim's own wallet.
-That wallet contains no attacker key.
 Blind sends to `derive(keyId)` remain unsafe.
 A sender must use a verified wallet address.
 Same-`rpId` phishing remains possible when the origin policy is wide.
-Admin consent given to an attacker wallet remains valid consent.
+Consent for the wrong wallet remains valid consent.
 
-## Rollout ordering
+## Component status
 
-1. Land the contract changes: proof domains, full-Signer commitment, durable admin check, records.
-2. Publish the canonical WASM hash and regenerate the TypeScript bindings.
-3. Deploy the indexer response with birth fields and completeness.
-4. Release the SDK: birth verification, purpose-specific records, no flags, no migration.
-5. Update the demo and applications to the new callback.
+1. The contract changes are complete.
+2. The canonical WASM and TypeScript bindings are published.
+3. `passkey-kit@0.17.0` includes the security checks.
+4. `passkey-kit@0.17.1` supports the additive dual-field indexer rollout.
+5. The demo and relayer use the canonical WASM.
+6. The hosted indexer still needs the schema-2 response.
 
-Fresh-device recovery works only after step 3.
+Fresh-device recovery works only after step 6.
 The indexer must deploy the new response before that recovery works.
 
 ## Required tests
@@ -193,9 +189,9 @@ Contract tests cover:
 Client tests cover:
 
 - one real candidate passes all checks and connects;
-- a copied constructor proof at an evil birth address fails the birth check;
-- evil birth then upgrade fails the birth check;
-- an attacker key under the victim credential id fails the fresh assertion;
+- an unaccepted birth address fails the birth check;
+- a post-birth code change does not replace the birth check;
+- a mismatched public key fails the fresh assertion;
 - altered initial limits fail the constructor proof;
 - incomplete indexer data fails closed;
 - two valid candidates raise `WALLET_AMBIGUOUS`;
@@ -221,7 +217,6 @@ Every failure leaves the kit disconnected.
 The indexer response must include `complete`, `indexedThroughLedger`, and candidates.
 Each candidate must include `contractId`, `birthWasmHash`, `creationTransactionHash`, and `creationLedger`.
 See `indexer-signer-provenance-response.md` for the full contract and tests.
-See `/tmp/passkey-indexer-gist-v2.md` for the coordination comment.
 
 Compact example:
 

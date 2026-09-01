@@ -1,11 +1,13 @@
 # passkey-kit v1 contract build + testnet deployment — 2026-07-11 (re-pinned 2026-07-13)
 
-This manifest is THE canonical hash source for the passkey-kit v1 contract
-set. The Makefile, SDK configuration, `verify:bindings` drift guard, and
-Mercury's hosted passkey-indexer ingestion allowlist must all consume the
-hashes recorded here — never a locally rebuilt hash.
+> [!WARNING]
+> This manifest is historical and superseded.
+> Use [`deployments-2026-09-01.md`](./deployments-2026-09-01.md).
 
-> **Status: re-pinned 2026-07-13 (FINAL for testnet).** These are the v1
+This manifest records the canonical contract set from July 2026.
+The current SDK, relayer, bindings, and indexer must not use these hashes.
+
+> **Historical status: re-pinned 2026-07-13.** These are the v1
 > contracts including the follow-up hardening pass (last-admin guard +
 > error 103; durable last-signer guard + error 104 — a Persistent,
 > non-expiring signer always exists, enforced at construction, removal,

@@ -96,9 +96,9 @@ The SDK verifies every untrusted candidate in this order:
 6. A fresh assertion verifies under the live public key.
 7. Exactly one candidate passes every check.
 
-Birth verification is load-bearing.
-Evil birth code can copy a pending constructor proof, add an attacker, and then upgrade.
-The copied proof, signer, and fresh assertion then all agree.
+Birth verification is required.
+Current wallet code does not prove which code created the wallet.
+The SDK therefore verifies the direct creation transaction.
 The SDK fetches the creation transaction through Stellar RPC.
 It recomputes the transaction hash from the envelope.
 It confirms the birth WASM hash is in `acceptedBirthWasmHashes`.
@@ -109,9 +109,9 @@ The SDK captures the latest RPC ledger before an indexer lookup.
 The response must cover that ledger without gaps.
 A complete but stale response fails closed.
 
-The stored proof rejects forged state from custom birth code.
-The birth check rejects a copied constructor proof at custom birth code.
-The fresh proof rejects an attacker key under a copied credential id.
+The stored proof rejects state without a valid signer proof.
+The birth check rejects unaccepted birth code.
+The fresh proof rejects a mismatched public key.
 The SDK connects only when exactly one candidate passes every check.
 
 Code identity alone does not prove signer provenance.
@@ -119,7 +119,7 @@ A signer getter alone does not prove signer provenance.
 A binding record alone does not prove signer provenance.
 The birth check and the two WebAuthn proofs supply the missing evidence.
 
-This design closes the reported SDK wallet-binding and fund-redirection path.
+This design closes unverified wallet binding and fund redirection.
 Pre-release wallets are unsupported in this release.
 No `allowUnverifiedLegacy` flag exists.
 No `bind_secp256r1` migration exists.
@@ -131,17 +131,14 @@ See [`security-signer-provenance-v2.md`](./security-signer-provenance-v2.md) for
 Operational verification uses [`mainnet-hardening.md`](./mainnet-hardening.md).
 The `scripts/check-mainnet-deployer.mjs` command fails when the geometry changes.
 
-## Deployer inventory
+## Active deployer identities
 
 | Generation | Derivation | Address | State / action |
 |---|---|---|---|
 | Current smart-account-kit | `sha256("openzeppelin-smart-account-kit")` seed | `GAAH4OT36RRCCAGKARGPN2HLHT2NOBVFHO4GUHA6CF7UKQ4MMV24WQ4N` | Shared sign-only identity; do not fund or rotate. |
 | Current passkey-kit | `sha256("kalepail")` seed | `GC2C7AWLS2FMFTQAHW3IBUB4ZXVP4E37XNLEF2IK7IVXBB6CMEPCSXFO` | Shared sign-only identity; do not fund or rotate. |
-| Legacy passkey-kit mainnet, before `23597d8` | `sha256(mainnet network passphrase)` seed | `GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7` | Locked: master weight `0`; cannot sign. |
-| Legacy passkey-kit testnet, before `23597d8` | `sha256(testnet network passphrase)` seed | *(withheld; see the internal operations tracker)* | Superseded and testnet only. Track it for retirement. |
 
 Changing a deployer changes every wallet address in that namespace.
-Keep legacy identities in discovery and migration logic.
 Use `restoreSource` for footprint fees.
 
 ## Operational follow-ups
@@ -152,4 +149,3 @@ They reduce testnet operational risk.
 - Harden the testnet deployers after every network reset.
 - Make provisioning fail when a deployer account has unsafe thresholds.
 - Do not let the relayer fund a shared deployer.
-- Sweep or retire every superseded testnet deployer.

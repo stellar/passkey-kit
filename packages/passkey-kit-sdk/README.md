@@ -31,6 +31,8 @@ const signer = await wallet.get_signer({
 
 State-changing methods return an `AssembledTransaction`. Review the simulated transaction before signing and submitting it.
 
-Use only the canonical deployment hash from the current [deployment manifest](https://github.com/stellar/passkey-kit/tree/main/docs). Existing wallet instances require an authorized upgrade when the canonical hash changes.
+Use only the canonical hash in the current [deployment manifest](https://github.com/stellar/passkey-kit/blob/main/docs/deployments-2026-09-01.md).
+Pre-`0.17.0` wallets cannot connect through `passkey-kit`, even after an upgrade.
+Create new wallets with the canonical hash.
 
 The generated TypeScript types and method documentation come from the contract specification. The repository preserves this README during binding regeneration.

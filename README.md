@@ -70,7 +70,7 @@ import { PasskeyKit } from "passkey-kit";
 const kit = new PasskeyKit({
   rpcUrl: "https://soroban-testnet.stellar.org",
   networkPassphrase: "Test SDF Network ; September 2015",
-  // Canonical smart-wallet WASM hash; see docs/deployments-*.md
+  // Canonical smart-wallet WASM hash; see docs/deployments-2026-09-01.md
   walletWasmHash: "97ce047884106b1c6c3bb40b8973cc48db1c4dad95c9e20462bf2c701daa764e",
 });
 ```
@@ -158,7 +158,7 @@ Browser-side facade for wallet lifecycle and signing. Holds no secrets.
 | `walletWasmHash` | `string` (hex) | Yes | Smart-wallet WASM hash used to deploy new wallets. |
 | `acceptedWasmHashes` | `string[]` (hex) | No | Current wallet code hashes accepted during connection. Defaults to `[walletWasmHash]`. |
 | `acceptedBirthWasmHashes` | `string[]` (hex) | No | Immutable creation code hashes accepted during connection. Defaults to `[walletWasmHash]`. |
-| `horizonUrl` | `string` | No | Full-history Horizon URL for creation transactions outside RPC retention. Public networks use official Horizon endpoints by default. |
+| `horizonUrl` | `string` | No | Full-history Horizon URL for creation transactions outside RPC retention. Public and test networks use official Horizon endpoints by default. |
 | `rpId` | `string` | No | WebAuthn Relying Party id (domain). Defaults to the current origin. |
 | `allowedOrigins` | `readonly string[]` | No | Origins accepted for signer proofs. Defaults to the browser origin. Required with `rpId` outside a browser. |
 | `requireUserVerification` | `boolean` | No | Require the WebAuthn User Verified flag during SDK proof checks. Defaults to `false`; User Presence remains required. |
@@ -344,19 +344,24 @@ The SDK abstracts discovery behind a `SignerIndexer` interface (`getSigners` / `
 
 | Backend | Config | Wire | Status |
 |---|---|---|---|
-| `MercuryIndexer` | `MercuryIndexerConfig` (`url?`, `rpc?`) | Keyless REST (`GET /api/wallet/*`, `/api/lookup/*`) | **Live on testnet + mainnet** — both signer generations, full history. Resolve with `MercuryIndexer.forNetwork(...)`. |
+| `MercuryIndexer` | `MercuryIndexerConfig` (`url?`, `rpc?`) | Keyless REST (`GET /api/wallet/*`, `/api/lookup/*`) | Signer enumeration is live on testnet and mainnet. Schema-2 wallet candidates are pending. |
 
 > [!NOTE]
-> Mercury's hosted passkey-indexer is public and **keyless**, covering **testnet and mainnet** with full history across both signer generations (legacy `("sw_v1", …)` tuples and the v1 typed `#[contractevent]`s). It returns fully-decoded signers, so the client maps JSON straight onto `WalletSigner`. Resolve the base URL per network with `MercuryIndexer.forNetwork({ rpc? }, networkPassphrase)` (returns `null` off testnet/mainnet); passing an `rpc` lets it flag evicted temporary signers and confirm reverse-lookup candidates on-chain.
+> Mercury's hosted passkey-indexer is public and **keyless** on testnet and mainnet.
+> Its current API supports signer enumeration.
+> As of 2026-09-01, its lookup route does not return the required schema-2 birth claims.
+> The SDK therefore fails closed for fresh-device discovery.
+> Verified local wallet records continue to connect.
+> See the [schema-2 response contract](docs/indexer-signer-provenance-response.md).
 
 ```ts
 const indexer = MercuryIndexer.forNetwork({ rpc }, networkPassphrase);
-const lookup = await lookupWithRetry(() =>
-  indexer!.findWallets(SignerKey.Secp256r1(keyId))
-);
+const lookup = await indexer!.findWallets(SignerKey.Secp256r1(keyId));
 ```
 
-`lookupWithRetry(fn, { attempts?, delayMs?, predicate? })` (browser-safe) polls a lookup until it returns a non-empty result — useful right after a write, while the indexer catches up to the ledger.
+`lookupWithRetry(fn, { attempts?, delayMs?, predicate? })` polls array results.
+Use it with `getSigners()` after a write.
+Do not use it with `findWallets()`, which returns `WalletCandidateLookup`.
 
 ## Tokens (`SACClient`)
 
@@ -426,6 +431,8 @@ The legacy 1–9 range still decodes as `SmartWalletLegacy`.
 | 100 | `SignerNotFound` | The requested signer does not exist. |
 | 101 | `SignerAlreadyExists` | `add_signer` on an existing key. |
 | 102 | `SignerExpired` | Expiration timestamp is in the past. |
+| 103 | `LastAdminSigner` | The change would leave no durable admin signer. |
+| 104 | `LastSigner` | The change would leave no durable signer. |
 | 110 | `MissingContext` | No signer in the map may authorize a requested context. |
 | 111 | `SignatureKeyValueMismatch` | A signature's variant doesn't match its stored signer. |
 | 120 | `ClientDataJsonTooLarge` | `clientDataJSON` exceeds the 1024-byte parse buffer. |
@@ -434,6 +441,10 @@ The legacy 1–9 range still decodes as `SmartWalletLegacy`.
 | 123 | `InvalidWebAuthnType` | `type` is not `"webauthn.get"`. |
 | 124 | `InvalidAuthenticatorData` | `authenticatorData` shorter than 37 bytes. |
 | 125 | `UserPresenceRequired` | Authenticator did not set the User Present (UP) flag. |
+| 126 | `AuthenticatorDataTooLarge` | `authenticatorData` exceeds the 1024-byte limit. |
+| 130 | `BindingProofRequired` | A Secp256r1 signer is missing its required proof. |
+| 131 | `BindingProofUnexpected` | A proof was supplied for a non-Secp256r1 signer. |
+| 133 | `BindingPublicKeyImmutable` | An update tried to change a bound public key. |
 
 ## Types
 
@@ -489,6 +500,7 @@ Signer and signature expiration are **UNIX timestamps in seconds** (inclusive: v
 
 - **Limit value and authority.** Limit wallet balances, signer permissions, policy allowances, and relayer permissions. Monitor wallet activity. Keep independent recovery, submission, and authorized upgrade paths.
 - **Hosted services can fail or return stale data.** Do not treat relayer or indexer responses as authoritative chain state. Confirm security-sensitive state through Stellar RPC.
+- **Fresh-device discovery needs schema 2.** The hosted Mercury lookup does not yet return schema-2 birth claims. The SDK fails closed until deployment.
 - **Keep at least one durable admin signer.** The contract rejects any change that would remove or demote its last durable (`Persistent`, non-expiring) admin signer (`LastAdminSigner = 103`) or leave it without any durable signer (`LastSigner = 104`), so a wallet always retains one signer that cannot evict or expire. Signers outside that guard — `Temporary` storage or with an expiration — lapse on their own: add a replacement *before* removing or demoting an existing signer.
 - **The default deployer is a shared, public keypair — its secret is publicly derivable.** It salts deployment and signs only the CreateContractV2 authorization entry; the relayer supplies the envelope source, sequence, and fees. It never controls the wallet. Its determinism is load-bearing for discovery: overriding `deploySource` changes every derived address and breaks keyId → wallet lookup. Use a separate funded `restoreSource` for `restoreFootprint`; never fund the shared deployer. A third-party `bumpSequence` to `INT64_MAX` no longer blocks the current SDK because it never uses the shared deployer as an envelope source. Full analysis: [`docs/security-deterministic-deployer.md`](docs/security-deterministic-deployer.md).
 - **Current code identity is not signer provenance.** The SDK also verifies immutable birth code and address-bound proofs. See the [signer-provenance design](docs/security-signer-provenance-v2.md).
