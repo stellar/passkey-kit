@@ -398,17 +398,40 @@ function candidateHasBirth(
   );
 }
 
+function sameContractIds(
+  candidates: readonly IncompleteWalletCandidate[],
+  otherRows: readonly unknown[]
+): boolean {
+  const otherCandidates = otherRows
+    .map(parseWalletRef)
+    .filter(
+      (candidate): candidate is IncompleteWalletCandidate =>
+        candidate !== undefined
+    );
+  if (otherCandidates.length !== otherRows.length) return false;
+
+  const candidateIds = new Set(candidates.map(({ contractId }) => contractId));
+  const otherIds = new Set(otherCandidates.map(({ contractId }) => contractId));
+  return (
+    candidateIds.size === otherIds.size &&
+    [...candidateIds].every((contractId) => otherIds.has(contractId))
+  );
+}
+
 /** Map a lookup JSON body onto {@link WalletCandidateLookup} without inventing birth data. */
 function parseLookupResponse(res: unknown): WalletCandidateLookup {
   if (!isRecord(res)) {
     return { complete: false, candidates: [] };
   }
 
-  const rows = Array.isArray(res.wallets)
-    ? res.wallets
-    : Array.isArray(res.candidates)
+  const rows =
+    res.schema === 2 && Array.isArray(res.candidates)
       ? res.candidates
-      : [];
+      : Array.isArray(res.wallets)
+        ? res.wallets
+        : Array.isArray(res.candidates)
+          ? res.candidates
+          : [];
   const candidates: IncompleteWalletCandidate[] = rows
     .map(parseWalletRef)
     .filter(
@@ -420,10 +443,16 @@ function parseLookupResponse(res: unknown): WalletCandidateLookup {
     res.indexed_through_ledger ?? res.indexedThroughLedger
   );
   const claimedComplete = res.complete === true;
+  const dualShapeConsistent =
+    res.schema !== 2 ||
+    !Array.isArray(res.candidates) ||
+    !Array.isArray(res.wallets) ||
+    sameContractIds(candidates, res.wallets);
   const complete =
     res.schema === 2 &&
     claimedComplete &&
     indexedThroughLedger !== undefined &&
+    dualShapeConsistent &&
     candidates.every(candidateHasBirth);
 
   if (complete) {

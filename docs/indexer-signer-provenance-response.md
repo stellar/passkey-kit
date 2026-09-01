@@ -1,261 +1,38 @@
-# Security coordination: passkey wallet candidate ambiguity and signer provenance
+# Mercury schema-2 wallet candidate response
 
-## Distribution
+Status: required by `passkey-kit@0.17.0` and later, but not yet deployed.
 
-Please treat this document as private security coordination.
+This document defines the public response contract for fresh-device wallet discovery.
+It contains no private report data.
+It does not describe the closed security issue.
 
-Do not publish the vulnerability details before the coordinated release.
+## Current hosted status
 
-## Requested action
+Mercury hosts public, keyless indexers on testnet and mainnet.
+The signer enumeration routes are live.
 
-We need the indexer to return every wallet candidate for one Secp256r1 credential ID.
+As of 2026-09-01, the lookup routes return the old response shape.
+That shape has `wallets` and `count` fields.
+It does not contain wallet birth claims or a complete ledger position.
 
-The indexer must not select a candidate.
+`passkey-kit@0.17.0` and later treat the old shape as incomplete.
+Fresh-device discovery therefore fails closed.
+Verified local wallet records continue to connect.
 
-The indexer must confirm current signer state through Stellar RPC.
+## Required route
 
-The indexer must return birth data for each candidate.
+Serve schema 2 on the existing credential lookup route:
 
-The indexer must mark incomplete scans.
+```text
+GET /api/lookup/:credentialId
+```
 
-The SDK performs the final cryptographic verification.
+Keep the route public and keyless.
+Use the hexadecimal credential ID format that the current route accepts.
 
-This change supports an urgent SDK and smart-wallet security update.
+## Required response
 
-## Executive summary
-
-The current wallet lookup can return more than one wallet for one credential ID.
-
-One wallet can be the real wallet.
-
-Another wallet can be an attacker-controlled squat.
-
-The squat can run the accepted smart-wallet WASM.
-
-The squat can also contain a live signer with the victim credential ID.
-
-Therefore, a WASM check and a signer lookup cannot prove wallet ownership.
-
-The old constructor creates this gap.
-
-The old constructor writes the first signer without proof from that signer.
-
-An attacker can create genuine signer state under accepted code.
-
-An indexer can report that state accurately and still return an unsafe candidate.
-
-The problem does not require false indexer data.
-
-The problem comes from incomplete ownership evidence.
-
-## Affected user path
-
-The strongest attack path uses a secondary passkey.
-
-A user first creates a wallet with a primary passkey.
-
-The user later adds a secondary passkey to the same wallet.
-
-The secondary credential ID becomes public through contract state and events.
-
-The real wallet address does not derive from the secondary credential ID.
-
-Therefore, `derive(secondaryKeyId)` remains unused by the real wallet.
-
-An attacker can deploy a contract at that unused address.
-
-The public shared deployer permits this deployment.
-
-The attacker can deploy the accepted wallet WASM.
-
-The old constructor lets the attacker select the first signer without signer authorization.
-
-The attacker can retain an unlimited signer on the squat.
-
-The attacker can also install the victim credential data on the squat.
-
-Both wallets can then contain the same credential ID.
-
-Both wallets can pass a current WASM hash check and a live signer lookup.
-
-A fresh device has no trusted local wallet mapping.
-
-The device can then receive the squat from the indexer.
-
-The SDK can display the squat as the user wallet.
-
-Funds sent to that address enter the attacker-controlled wallet.
-
-## Why indexer ordering cannot prove ownership
-
-The lookup response has an order.
-
-That order does not have a security meaning.
-
-The first row is not necessarily the real wallet.
-
-Creation time also does not prove ownership.
-
-The derived address does not prove ownership.
-
-The public deployer lets an attacker occupy that address.
-
-The accepted WASM hash does not prove ownership by itself.
-
-Custom birth code can upgrade to the accepted WASM.
-
-A live signer entry does not prove ownership either.
-
-The indexer must therefore return candidates without choosing an owner.
-
-## Immediate indexer containment
-
-### 1. Return every candidate
-
-Return one row per wallet that lists the credential ID.
-
-Never return only the first match.
-
-Never drop a candidate because another candidate exists.
-
-Never drop a candidate because it matches the derived address.
-
-### 2. Confirm current signer state
-
-Check live signer state through Stellar RPC before you return a candidate.
-
-Reject rows whose signer is removed, expired, or evicted.
-
-Record the ledger you used for confirmation.
-
-### 3. Report ambiguity explicitly
-
-Set `complete = false` when a scan cannot finish.
-
-Set `indexedThroughLedger` to the highest ledger your scan covered.
-
-Serve a current `indexedThroughLedger` on every request.
-
-Never replace an incomplete scan with an empty result.
-
-### 4. Return birth data
-
-Return `birthWasmHash`, `creationTransactionHash`, and `creationLedger` for each candidate.
-
-Take these values from the transaction that created the contract.
-
-Do not guess or reconstruct them from current state.
-
-A candidate without complete birth data is still a candidate.
-
-Return it. The SDK will fail it closed.
-
-## Complete mitigation
-
-The complete mitigation uses the contract, the SDK, and the indexer together.
-
-The production design does not use a factory contract.
-
-It keeps the existing shared account deployer.
-
-It keeps `salt = sha256(keyId)`.
-
-It uses `__constructor` directly.
-
-### Proof domains
-
-The wallet uses two proof domains.
-
-`GENESIS` covers the constructor signer.
-
-`ADD` covers each later Secp256r1 signer.
-
-A proof from one domain never verifies in the other.
-
-Each proof commits to the network, the wallet address, the purpose, and the full original Signer.
-
-The full original Signer covers key id, public key, limits, expiration, and storage.
-
-A relayer or a front-runner cannot alter the signer policy without breaking the proof.
-
-### Constructor proof
-
-The new constructor receives `signer` and `proof`.
-
-The constructor verifies the GENESIS proof before it writes signer state.
-
-A failed proof aborts the deployment transaction.
-
-The failed deployment does not occupy the contract address.
-
-The constructor also requires at least one durable admin.
-
-A durable admin is a Persistent signer with no expiration.
-
-### Later passkey additions
-
-`add_secp256r1` requires wallet authorization and an ADD proof.
-
-The generic `add_signer` rejects Secp256r1 signers.
-
-No `bind_secp256r1` function exists.
-
-No migration path exists in this release.
-
-### SDK verification
-
-The SDK treats every indexer field as a claim.
-
-The SDK verifies birth data first:
-
-1. Fetch `creationTransactionHash` through Stellar RPC.
-2. Recompute the transaction hash from the envelope.
-3. Confirm success, `creationLedger`, and the candidate address.
-4. Confirm a direct `CreateContractV2` operation.
-5. Confirm the birth WASM hash is in `acceptedBirthWasmHashes`.
-
-RPC retention can expire a transaction.
-
-The SDK then uses configured Horizon history.
-
-It recomputes and verifies the hash the same way.
-
-The SDK checks the current WASM hash against `acceptedWasmHashes`.
-It then checks the live signer and the binding record.
-
-The SDK re-verifies the purpose-specific stored proof itself.
-
-The SDK also requests a fresh WebAuthn assertion.
-
-The SDK connects only when exactly one candidate passes every check.
-
-### Why the birth check is load-bearing
-
-Evil birth code can copy a pending constructor proof.
-
-It can add an attacker signer and then upgrade to accepted code.
-
-The copied proof, the copied signer, and the fresh assertion then all agree.
-
-Only the creation transaction distinguishes that wallet from the real wallet.
-
-The birth data plus RPC verification supplies that distinction.
-
-## Requested response shape
-
-The endpoint must serve a versioned candidate response.
-
-The response must include these fields:
-
-- `schema`
-- `complete`
-- `indexedThroughLedger`
-- `candidates[].contractId`
-- `candidates[].birthWasmHash`
-- `candidates[].creationTransactionHash`
-- `candidates[].creationLedger`
-
-This shape is the contract:
+Return this response when the scan is complete:
 
 ```json
 {
@@ -273,269 +50,161 @@ This shape is the contract:
 }
 ```
 
-Optional evidence fields may accompany each candidate.
+The response has these required fields:
 
-Optional fields include the live signer public key, signer status, and the binding record bytes.
+- `schema` must equal `2`.
+- `complete` must equal `true` only after a complete scan.
+- `indexedThroughLedger` is the highest fully indexed ledger.
+- `candidates` contains every matching wallet candidate.
 
-Optional fields are evidence only.
+Each candidate has these required fields:
 
-The SDK verifies every security-sensitive claim through RPC.
+- `contractId` is the wallet contract address.
+- `birthWasmHash` is the WASM hash from the creation transaction.
+- `creationTransactionHash` is the creating transaction hash.
+- `creationLedger` is the ledger that created the contract.
 
-## Fail-closed rules
+Use lowercase hexadecimal strings for both hashes.
+Each hash must contain 64 characters.
+Use a safe positive integer for each ledger number.
 
-The SDK rejects the whole response when:
+The SDK accepts snake-case aliases for candidate and ledger fields.
+These aliases include `contract_id`, `birth_wasm_hash`, and `creation_ledger`.
+It also accepts `creation_transaction_hash`, `creation_tx`, and `indexed_through_ledger`.
+`schema` must be the number `2`, not the string `"2"`.
 
-- `schema` is missing or not `2`;
-- `complete` is missing or `false`;
-- `indexedThroughLedger` is missing;
-- `indexedThroughLedger` is below the SDK freshness floor;
-- a candidate misses any required birth field;
-- a birth field has a malformed value.
+## Candidate rules
 
-The SDK rejects a candidate when its creation transaction:
+Return every wallet that currently contains the requested live signer.
+Do not select one wallet for the client.
+Do not use response order as a trust signal.
+Deduplicate candidates by `contractId`.
 
-- cannot be fetched through RPC or Horizon history;
-- does not match the recomputed transaction hash;
-- did not succeed;
-- did not create the candidate address;
-- does not use a direct `CreateContractV2`;
-- did not deploy a WASM hash in `acceptedBirthWasmHashes`.
+Confirm current signer state before you return a complete result.
+Exclude removed, expired, or evicted signers from the live candidate set.
+Use Stellar RPC when a temporary signer's state needs confirmation.
 
-A rejected response leaves the kit disconnected.
+Take every birth field from the direct creation transaction.
+Do not infer birth data from current contract state.
+Do not use the current WASM hash as the birth WASM hash.
+Do not create missing birth values.
 
-The application shows a discovery failure, never an unverified wallet.
+## Completeness and freshness
 
-## Freshness rule
+Set `complete` to `true` only after an end-to-end scan.
+The scan must include all indexed history through `indexedThroughLedger`.
+The ledger position must have no known gaps.
 
-The SDK captures the latest RPC ledger before it starts the lookup.
-That ledger becomes the freshness floor for the response.
-The response must cover that ledger without gaps.
-The SDK rejects a response below that floor.
-A complete but stale response fails closed.
-This rule prevents a complete response from hiding a recently created candidate.
+Set `complete` to `false` when any required scan cannot finish.
+Keep discovered candidates in the incomplete response for diagnostics.
+Do not replace an incomplete result with an empty complete result.
 
-## API behavior requirements
+Example incomplete response:
 
-The API must return deterministic JSON fields.
+```json
+{
+  "schema": 2,
+  "complete": false,
+  "indexedThroughLedger": 5439000,
+  "candidates": []
+}
+```
 
-The API ordering must remain informational only.
+The SDK records the current RPC ledger before it requests candidates.
+It rejects a response below that ledger.
+Serve a current `indexedThroughLedger` on every request.
 
-The API must return a stable contract ID for each candidate.
+## SDK behavior
 
-The API must expose its indexed ledger position.
+The SDK treats every indexer field as a claim.
+It verifies each creation transaction through Stellar RPC or Horizon history.
+It recomputes the transaction hash from the returned envelope.
 
-The API must serve a current indexed ledger position on every request.
+The SDK verifies these creation facts:
 
-The API must identify incomplete results.
+- the transaction succeeded;
+- the transaction created the candidate address;
+- the operation used direct `CreateContractV2`;
+- the transaction used the claimed creation ledger;
+- the birth WASM hash is accepted.
 
-The API must not replace an incomplete result with an empty result.
+The SDK then verifies current code and signer state.
+It also verifies the stored signer proof and a fresh passkey assertion.
+The SDK connects only when one candidate passes all checks.
 
-The API must not cache a live signer result beyond its safe freshness window.
+The SDK rejects the complete response when any required field is missing.
+It also rejects malformed fields and stale ledger positions.
+Every rejection leaves the kit disconnected.
 
-The API must invalidate signer state after removal events.
+## Compatibility
 
-The API must still confirm temporary signer state through RPC.
+Old clients can continue to read the existing `wallets` and `count` fields.
+Add schema-2 fields without removing those fields during the transition.
+Put complete birth rows in the new `candidates` field.
+The new SDK prefers `candidates` when `schema` equals `2`.
+It uses `wallets` for the old response shape.
+When both arrays exist, their `contractId` sets must match.
+A mismatch makes the complete response invalid.
 
-The API must serve the versioned response on the same lookup routes.
+An additive dual-field rollout requires `passkey-kit@0.17.1` or later.
+Version `0.17.0` remains fail-closed on that rollout shape.
 
-The old response shape must remain available for old clients during rollout.
+The deployed contract and `passkey-kit@0.17.1` support schema 2.
+The indexer deployment is the remaining service step.
+No contract, demo, or relayer change is required for that deployment.
 
-The old shape must never satisfy the new SDK.
+## Required tests
 
-## Rollout ordering
+Test a credential with no wallets.
+Return a complete empty candidate list after a complete scan.
 
-### Phase 1: indexer release
+Test a credential with one live wallet.
+Return one candidate with verified birth fields.
 
-Add the versioned response with birth fields and completeness.
+Test a credential with multiple live wallets.
+Return every candidate with its own birth fields.
 
-Remove every first-result selection.
+Test duplicate index rows.
+Return one candidate for each `contractId`.
 
-Confirm live signer state through RPC.
-
-Keep the old response shape for old clients during the transition.
-
-Fresh-device recovery starts working only when this phase deploys.
-
-### Phase 2: contract release
-
-Upload the new smart-wallet WASM.
-
-Publish its canonical hash.
-
-Regenerate the TypeScript bindings from that exact WASM.
-
-Update `walletWasmHash` and `acceptedWasmHashes`.
-
-Create new wallets with the GENESIS proof.
-
-The constructor requires a durable admin.
-
-### Phase 3: SDK release
-
-Release the candidate-array lookup with birth verification.
-
-Remove the `allowUnverifiedLegacy` flag.
-
-Remove the `bind_secp256r1` path.
-
-Reject every candidate that fails any check.
-
-Pre-release wallets are unsupported in this release.
-
-### Phase 4: application update
-
-Update the demo and applications to `getWalletCandidates`.
-
-Remove all legacy flags from application code.
-
-## Required indexer tests
-
-Test a credential with one real wallet.
-
-Return one candidate with complete birth data.
-
-Test a credential with one real wallet and one squat.
-
-Return both candidates with their own birth data.
-
-Test a removed signer event.
-
-Do not return the removed signer as live.
-
-Test an expired signer.
-
-Do not return the expired signer as live.
+Test removed and expired signers.
+Do not return them as live candidates.
 
 Test an evicted temporary signer.
+Confirm its state through RPC.
 
-Confirm eviction through RPC.
+Test a missing creation transaction.
+Return `complete: false` and never create birth data.
 
-Test an RPC timeout for one candidate.
+Test an RPC timeout or partial scan.
+Return `complete: false` or fail the request.
 
-Return an incomplete result or fail the request.
+Test a stale `indexedThroughLedger` value.
+Confirm that the SDK rejects the response.
 
-Do not return a complete empty result.
+Test every missing required field.
+Confirm that the SDK rejects each response.
 
-Test duplicate indexer rows for one contract.
+Test the old fields during the transition.
+Confirm that old clients remain compatible.
 
-Return one deduplicated candidate.
+## Monitoring
 
-Test two valid wallets for one credential.
-
-Return both candidates.
-
-Test a partial scan.
-
-Set `complete = false` and keep the candidates.
-
-Test a stale scan with `indexedThroughLedger` below the RPC latest ledger.
-
-The SDK rejects the response even when `complete = true`.
-
-Serve a fresh ledger value on every request.
-
-Test a candidate with an unknown creation transaction.
-
-Return the candidate with `complete = false` for the response, or omit the scan section for that candidate and mark incompleteness.
-
-Never invent birth data.
-
-Test the old client shape.
-
-Keep it byte-compatible during rollout.
-
-Test the new shape against the fail-closed rules.
-
-Every required field must appear.
-
-## Monitoring requirements
-
-Count credential IDs with more than one candidate.
-
+Count complete and incomplete responses.
 Count candidates with missing birth data.
-
-Count responses with `complete = false`.
-
-Count responses rejected as stale by the SDK freshness floor.
-
-Count RPC confirmation failures.
-
-Count removed or evicted rows rejected during confirmation.
-
-Count SDK ambiguity errors when application telemetry provides them.
+Count signer confirmations that fail.
+Count responses that the SDK rejects as stale.
 
 Do not log private keys or authenticator secrets.
+Treat credential IDs and public keys as sensitive operational identifiers.
 
-Credential IDs and public keys already exist on-chain.
+## Deployment acceptance
 
-Treat them as security-sensitive identifiers in operational logs.
+The deployment is complete when both networks serve schema 2.
+Each response must include a current indexed ledger position.
+Each complete candidate must include verified birth fields.
+Incomplete scans must remain incomplete.
 
-## What the indexer cannot solve alone
-
-The indexer cannot prove ownership from an event alone.
-
-The indexer cannot prove ownership from the current WASM hash alone.
-
-The indexer cannot prove ownership from signer presence alone.
-
-The indexer cannot make response ordering secure.
-
-The indexer cannot prevent address occupancy by the public deployer.
-
-The indexer cannot protect SDK flows which bypass the indexer.
-
-The indexer can preserve every candidate and expose birth evidence.
-
-The SDK and contract must verify the cryptographic binding.
-
-## Remaining risk after this mitigation
-
-The public deployer still permits address occupancy.
-
-An attacker can still occupy an unused derived address.
-
-The victim's own deployment then fails visibly.
-
-That outcome is a denial-of-service problem.
-
-The SDK rejects occupied addresses without valid victim proofs and verified birth data.
-
-Therefore, the reported fund-redirection path closes.
-
-Blind sends to `derive(keyId)` also remain unsafe.
-
-A sender must use a verified wallet address.
-
-Only deployer control can prevent all occupancy in this namespace.
-
-This mitigation does not add that control.
-
-## Acceptance criteria
-
-The indexer serves the versioned response with all required fields.
-
-The indexer returns all confirmed candidates.
-
-The indexer never selects an owner.
-
-The indexer marks incomplete scans with `complete = false`.
-
-The indexer serves a current `indexedThroughLedger` on every request.
-
-The indexer supplies birth data from the creation transaction.
-
-The indexer does not claim that birth data proves ownership.
-
-The SDK verifies birth data, code, signer state, records, and fresh possession.
-
-The SDK connects only to one fully verified candidate.
-
-The constructor rejects a Secp256r1 signer without its domain-bound proof.
-
-The constructor requires a durable admin.
-
-The complete flow preserves the existing deployer and address formula.
-
-No factory contract participates in this design.
-
-No migration path exists for pre-release wallets.
+After deployment, test a fresh-device connection on both networks.
+Confirm that one valid candidate connects.
+Confirm that incomplete, stale, and ambiguous results fail closed.

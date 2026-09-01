@@ -1,7 +1,12 @@
 # passkey-kit smart-wallet security release — 2026-08-19
 
-This manifest is the canonical source for the fixed smart-wallet WASM.
-It supersedes the smart-wallet hash in `deployments-testnet-2026-07-11.md`.
+> [!WARNING]
+> This manifest is historical and superseded.
+> Do not use this WASM with `passkey-kit@0.17.0` or later.
+> Use [`deployments-2026-09-01.md`](./deployments-2026-09-01.md).
+
+This manifest records the canonical smart-wallet WASM on 2026-08-19.
+It superseded the smart-wallet hash in `deployments-testnet-2026-07-11.md`.
 The sample-policy and example-contract hashes remain unchanged.
 
 ## Fixed artifact
@@ -86,9 +91,9 @@ Each command returned this hash:
 
 ## Existing wallets
 
-Existing `binver = 1.0.0` wallets remain vulnerable until an authorized upgrade.
-Each owner must call `upgrade` with the fixed hash.
-The upgrade keeps the existing wallet address and signer storage.
+This section records the upgrade guidance from 2026-08-19.
+It does not apply to `passkey-kit@0.17.0` or later.
+The current SDK does not connect to these pre-release wallets.
 
 The testnet relayer rejects every superseded hash.
 This stops sponsored use of every superseded-wallet administration function.
@@ -103,7 +108,7 @@ This behavior is an intentional fail-closed compatibility change.
 Do not use these hashes for new deployments:
 
 ```text
-fdefad64b96837147e1c333e51f537b696eab925e9f147e63d597c04e3c903f0  vulnerable build
+fdefad64b96837147e1c333e51f537b696eab925e9f147e63d597c04e3c903f0  superseded build
 b2e858176fab112cc9afbe54590e13d12192ba7fa32dd83cf565d21f2f13179a  pre-release build with truncated SignerLimits metadata
 ```
 

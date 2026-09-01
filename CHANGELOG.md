@@ -2,6 +2,18 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.17.1 — 2026-09-01
+
+- **Prepared additive schema-2 rollout.** `MercuryIndexer` prefers the new
+  `candidates` field when a schema-2 response also contains legacy `wallets`.
+  It rejects mismatched dual-field candidate sets.
+  This lets the indexer keep old clients compatible during deployment.
+- **Corrected public documentation.** The docs now identify the current WASM,
+  describe the pending hosted indexer deployment, and remove private
+  coordination material.
+- **Kept the contract unchanged.** This patch uses the same smart-wallet WASM,
+  `passkey-kit-sdk@0.9.0`, and `sac-sdk@0.4.4` as `0.17.0`.
+
 ## 0.17.0 — 2026-09-01
 
 - **Closed accepted-code wallet redirection.** `__constructor` now requires a

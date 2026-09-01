@@ -14,7 +14,7 @@ The versions checked into each `package.json` are authoritative; `npm view` is t
 |---|---|
 | `passkey-kit-sdk` | `0.9.0` |
 | `sac-sdk` | `0.4.4` |
-| `passkey-kit` | `0.17.0` (signer provenance and verified wallet birth — see [CHANGELOG](../CHANGELOG.md)) |
+| `passkey-kit` | `0.17.1` (schema-2 compatibility and documentation — see [CHANGELOG](../CHANGELOG.md)) |
 
 > [!IMPORTANT]
 > Publishing is an **outward-facing, user-gated** step. Bump the versions intentionally, and have the person with npm access run the publish commands (they hold the credentials and the OTP device).
@@ -70,6 +70,9 @@ git status --short
 
 `pnpm run build` runs `build:bindings`, compiles the SDK to `dist/`, and runs the Node-ESM import smoke test (`verify-esm.mjs`). Commit any intended changes before continuing — publish from a clean tree.
 
+Publish only after the release commit is merged and tagged.
+The tag must resolve to the exact commit that produces the package.
+
 ## 4. Authenticated dry run
 
 A dry run verifies npm authentication and shows the tarball contents and the versions that would publish, without uploading. Run it for each package from its directory:
@@ -99,6 +102,9 @@ pnpm publish --no-git-checks             # from the repo root
 npm view passkey-kit version
 npm view passkey-kit dependencies        # confirm the binding versions resolved
 ```
+
+Use `--provenance` only from an npm-supported trusted CI provider.
+The provider must bind the package to the release commit.
 
 If npm requires a one-time password, append `--otp <fresh-code>` to each `pnpm … publish` command:
 

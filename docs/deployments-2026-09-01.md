@@ -88,4 +88,14 @@ Pre-`0.17.0` wallets remain on-chain, but this SDK does not connect to them.
 
 Address occupancy remains possible with the public shared deployer.
 That condition causes a visible deployment failure.
-It does not give an attacker control of a wallet accepted by this release.
+It does not give a third party control of a wallet accepted by this release.
+
+## Hosted service status
+
+The testnet demo and relayer proxy use this canonical WASM.
+Both services are live on 2026-09-01.
+
+Mercury signer enumeration is live on testnet and mainnet.
+Its hosted lookup route still returns the old response shape.
+Fresh-device discovery fails closed until Mercury deploys schema 2.
+See [`indexer-signer-provenance-response.md`](./indexer-signer-provenance-response.md).
