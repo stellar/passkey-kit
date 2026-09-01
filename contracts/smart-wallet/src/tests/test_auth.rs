@@ -7,8 +7,8 @@ extern crate std;
 
 use smart_wallet_interface::{
     types::{
-        Error, Signature, Signatures, Signer, SignerExpiration, SignerKey, SignerLimits,
-        SignerStorage,
+        Error, Secp256r1Signature, Signature, Signatures, Signer, SignerExpiration, SignerKey,
+        SignerLimits, SignerStorage,
     },
     PolicyInterface,
 };
@@ -146,7 +146,7 @@ fn unlimited_signer_authorizes_anything() {
 fn empty_limits_map_authorizes_nothing() {
     let env = test_env();
     let a = Ed25519Signer::new(1);
-    let (wallet, _) = register_wallet(
+    let (wallet, _) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -179,7 +179,7 @@ fn limited_signer_covers_only_granted_contract() {
     let token = Address::generate(&env);
     let other = Address::generate(&env);
 
-    let (wallet, _) = register_wallet(
+    let (wallet, _) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -581,7 +581,7 @@ fn expired_co_signer_fails_auth() {
     let b = Ed25519Signer::new(2);
     let token = Address::generate(&env);
 
-    let (wallet, client) = register_wallet(
+    let (wallet, client) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -626,7 +626,7 @@ fn mutual_co_signers_authorize() {
     let b = Ed25519Signer::new(2);
     let token = Address::generate(&env);
 
-    let (wallet, client) = register_wallet(
+    let (wallet, client) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -670,7 +670,7 @@ fn limited_signer_can_always_self_remove() {
     let env = test_env();
     let a = Ed25519Signer::new(1);
 
-    let (wallet, _) = register_wallet(
+    let (wallet, _) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -705,7 +705,7 @@ fn limited_signer_cannot_remove_others() {
     let a = Ed25519Signer::new(1);
     let b = Ed25519Signer::new(2);
 
-    let (wallet, _) = register_wallet(
+    let (wallet, _) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -742,7 +742,7 @@ fn foreign_remove_signer_fn_does_not_interfere() {
     let a = Ed25519Signer::new(1);
     let foreign = Address::generate(&env);
 
-    let (wallet, _) = register_wallet(
+    let (wallet, _) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -971,7 +971,7 @@ fn policy_as_limit_called_per_context() {
     let token = Address::generate(&env);
     let a = Ed25519Signer::new(1);
 
-    let (wallet, client) = register_wallet(
+    let (wallet, client) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -1026,7 +1026,7 @@ fn nonpolicy_co_signer_own_limits_not_enforced() {
     let b = Ed25519Signer::new(2);
     let token = Address::generate(&env);
 
-    let (wallet, client) = register_wallet(
+    let (wallet, client) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -1089,7 +1089,7 @@ fn policy_co_signer_own_limits_not_enforced() {
     let token = Address::generate(&env);
     let s = Ed25519Signer::new(1);
 
-    let (wallet, client) = register_wallet(
+    let (wallet, client) = register_wallet_with(
         &env,
         &s.signer(
             &env,
@@ -1158,7 +1158,7 @@ fn rejecting_policy_as_limit_co_signer_rejects_candidate() {
     let token = Address::generate(&env);
     let a = Ed25519Signer::new(1);
 
-    let (wallet, _) = register_wallet(
+    let (wallet, _) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -1352,18 +1352,29 @@ fn sole_rejecting_policy_self_removal_fails_auth() {
     let policy_key = SignerKey::Policy(policy.clone());
     let wallet = Address::generate(&env);
 
-    // Non-admin-shaped, with empty independent limits.
+    // The policy is non-admin-shaped, so it cannot be the genesis signer:
+    // `__constructor` requires a durable admin. Born with an Ed25519 admin,
+    // the policy is then added under wallet auth.
     env.register_at(
         &wallet,
         Contract,
-        (Signer::Policy(
-            policy.clone(),
-            SignerExpiration(None),
-            empty_limits(&env),
-            SignerStorage::Persistent,
-        ),),
+        (
+            genesis_admin().signer(
+                &env,
+                SignerExpiration(None),
+                SignerLimits(None),
+                SignerStorage::Persistent,
+            ),
+            None::<Secp256r1Signature>,
+        ),
     );
     let client = ContractClient::new(&env, &wallet);
+    client.mock_all_auths().add_signer(&Signer::Policy(
+        policy.clone(),
+        SignerExpiration(None),
+        empty_limits(&env),
+        SignerStorage::Persistent,
+    ));
 
     // AUTH fails because pass 2 always consults policy__.
     let payload = payload(&env, 7);
@@ -1384,7 +1395,7 @@ fn sole_rejecting_policy_self_removal_fails_auth() {
     let root_auth = soroban_sdk::xdr::SorobanAuthorizationEntry {
         credentials: soroban_sdk::xdr::SorobanCredentials::AddressV2(
             soroban_sdk::xdr::SorobanAddressCredentials {
-                address: wallet.clone().try_into().unwrap(),
+                address: wallet.clone().into(),
                 nonce,
                 signature_expiration_ledger,
                 signature: Signatures(map![&env, (policy_key.clone(), Signature::Policy)])
@@ -1480,7 +1491,7 @@ fn rejecting_policy_self_removal_full_stack() {
     let root_auth = soroban_sdk::xdr::SorobanAuthorizationEntry {
         credentials: soroban_sdk::xdr::SorobanCredentials::Address(
             soroban_sdk::xdr::SorobanAddressCredentials {
-                address: wallet.clone().try_into().unwrap(),
+                address: wallet.clone().into(),
                 nonce,
                 signature_expiration_ledger,
                 signature: Signatures(map![&env, (policy_key.clone(), Signature::Policy)])
@@ -1518,12 +1529,15 @@ fn sole_admin_capable_policy_cannot_self_remove() {
     env.register_at(
         &wallet,
         Contract,
-        (Signer::Policy(
-            policy.clone(),
-            SignerExpiration(None),
-            contract_limits(&env, &wallet, None),
-            SignerStorage::Persistent,
-        ),),
+        (
+            Signer::Policy(
+                policy.clone(),
+                SignerExpiration(None),
+                contract_limits(&env, &wallet, None),
+                SignerStorage::Persistent,
+            ),
+            None::<Secp256r1Signature>,
+        ),
     );
     let client = ContractClient::new(&env, &wallet);
 
@@ -1546,7 +1560,7 @@ fn sole_admin_capable_policy_cannot_self_remove() {
     let root_auth = soroban_sdk::xdr::SorobanAuthorizationEntry {
         credentials: soroban_sdk::xdr::SorobanCredentials::Address(
             soroban_sdk::xdr::SorobanAddressCredentials {
-                address: wallet.clone().try_into().unwrap(),
+                address: wallet.clone().into(),
                 nonce,
                 signature_expiration_ledger,
                 signature: Signatures(map![&env, (policy_key.clone(), Signature::Policy)])
@@ -1590,7 +1604,7 @@ fn losing_candidate_does_not_invoke_policy() {
 
     // first (iterated first): requires the policy AND a key that is NOT in
     // the signatures map — a losing candidate.
-    let (wallet, client) = register_wallet(
+    let (wallet, client) = register_wallet_with(
         &env,
         &first.signer(
             &env,
@@ -1663,7 +1677,7 @@ fn sample_policy_charged_once_per_authorization() {
     };
     let missing = Ed25519Signer::new(3);
 
-    let (wallet, client) = register_wallet(
+    let (wallet, client) = register_wallet_with(
         &env,
         &first.signer(
             &env,
@@ -1731,7 +1745,7 @@ fn duplicated_policy_entry_invoked_once() {
     let token = Address::generate(&env);
     let a = Ed25519Signer::new(1);
 
-    let (wallet, client) = register_wallet(
+    let (wallet, client) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -1783,7 +1797,7 @@ fn duplicated_sample_policy_entry_charged_once() {
     let amount = 5_000_000i128;
     let a = Ed25519Signer::new(1);
 
-    let (wallet, client) = register_wallet(
+    let (wallet, client) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -1905,7 +1919,7 @@ fn missing_stored_policy_limit_key_rejects() {
     let token = Address::generate(&env);
     let a = Ed25519Signer::new(1);
 
-    let (wallet, _) = register_wallet(
+    let (wallet, _) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -1946,7 +1960,7 @@ fn expired_stored_policy_limit_key_rejects() {
     let token = Address::generate(&env);
     let a = Ed25519Signer::new(1);
 
-    let (wallet, client) = register_wallet(
+    let (wallet, client) = register_wallet_with(
         &env,
         &a.signer(
             &env,

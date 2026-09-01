@@ -46,9 +46,9 @@ export class CredentialManager {
     );
   }
 
-  /** Run a discoverable-credential authentication ceremony. */
-  authenticate(): Promise<AuthenticatedPasskey> {
-    return authenticatePasskey(this.webAuthnDeps);
+  /** Run a discovery or targeted authentication ceremony. */
+  authenticate(keyId?: string | Uint8Array): Promise<AuthenticatedPasskey> {
+    return authenticatePasskey(this.webAuthnDeps, keyId);
   }
 
   /** Persist a passkey → wallet association (no-op without a storage adapter). */

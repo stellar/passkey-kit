@@ -5,8 +5,8 @@
 //! The extend threshold is one week of ledgers below max, so at most one
 //! bump per entry per week is actually written.
 
-use smart_wallet_interface::types::SignerKey;
-use soroban_sdk::Env;
+use smart_wallet_interface::types::{BindingKey, SignerKey};
+use soroban_sdk::{Bytes, Env};
 
 /// One week of ledgers at the historical 5s close time. Close time can drift
 /// (CAP-0070 dynamic timing); this constant only shapes how often TTL bumps
@@ -42,6 +42,36 @@ pub fn extend_signer_key(env: &Env, signer_key: &SignerKey, persistent: bool) {
     } else {
         env.storage().temporary().extend_ttl::<SignerKey>(
             signer_key,
+            extend_threshold(max_ttl),
+            max_ttl,
+        );
+    }
+
+    // A Secp256r1 signer's binding record shares its durability and TTL, so
+    // it is kept alive by exactly the same activity that keeps the signer.
+    if let SignerKey::Secp256r1(key_id) = signer_key {
+        extend_binding_record(env, key_id, persistent);
+    }
+}
+
+/// Extend a binding record's TTL alongside its signer entry. Guarded on
+/// existence: a signer stored before this wasm (or not yet bound) has no
+/// record, and extending a missing entry is a host error.
+pub fn extend_binding_record(env: &Env, key_id: &Bytes, persistent: bool) {
+    let key = BindingKey::Secp256r1Binding(key_id.clone());
+    let max_ttl = env.storage().max_ttl();
+
+    if persistent {
+        if env.storage().persistent().has::<BindingKey>(&key) {
+            env.storage().persistent().extend_ttl::<BindingKey>(
+                &key,
+                extend_threshold(max_ttl),
+                max_ttl,
+            );
+        }
+    } else if env.storage().temporary().has::<BindingKey>(&key) {
+        env.storage().temporary().extend_ttl::<BindingKey>(
+            &key,
             extend_threshold(max_ttl),
             max_ttl,
         );

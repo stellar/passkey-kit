@@ -23,6 +23,7 @@ import type {
 import {
   Client as PasskeyClient,
   type Signer as SDKSigner,
+  type Secp256r1Signature,
   type SignerExpiration,
   type SignerKey as SDKSignerKey,
   type SignerLimits as SDKSignerLimits,
@@ -78,7 +79,7 @@ export function toContractSignerLimits(limits: SignerLimits): SDKSignerLimits {
   return [map];
 }
 
-function buildSecp256r1Signer(
+export function buildSecp256r1Signer(
   keyId: string | Uint8Array,
   publicKey: string | Uint8Array,
   limits: SignerLimits,
@@ -154,6 +155,31 @@ export function buildSecp256r1SignerTx(
 ): Promise<WalletTx> {
   return deps.wallet[fn](
     { signer: buildSecp256r1Signer(keyId, publicKey, limits, store, expiration) },
+    { timeoutInSeconds: deps.timeoutInSeconds }
+  );
+}
+
+/** Build a proof-carrying Secp256r1 signer addition. */
+export function buildAddSecp256r1SignerTx(
+  deps: WalletWriteDeps,
+  keyId: string | Uint8Array,
+  publicKey: string | Uint8Array,
+  limits: SignerLimits,
+  store: SignerStore,
+  proof: Secp256r1Signature,
+  expiration?: number
+): Promise<WalletTx> {
+  return deps.wallet.add_secp256r1(
+    {
+      signer: buildSecp256r1Signer(
+        keyId,
+        publicKey,
+        limits,
+        store,
+        expiration
+      ),
+      proof,
+    },
     { timeoutInSeconds: deps.timeoutInSeconds }
   );
 }

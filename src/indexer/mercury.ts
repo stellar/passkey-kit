@@ -34,12 +34,14 @@ import { contractDataExists } from "../rpc-data.js";
 import base64url from "../base64url.js";
 import type {
   FindWalletsHardeningDeps,
+  IncompleteWalletCandidate,
   IndexerHealth,
   SignerIndexer,
+  WalletCandidate,
+  WalletCandidateLookup,
   WalletSigner,
 } from "./types.js";
 import { signerKeyToContractScVal, walletSpec } from "./codec.js";
-import { deriveContractAddress } from "../utils.js";
 
 /**
  * Resolve the hosted passkey-indexer base URL for a network. Mercury indexes
@@ -92,19 +94,6 @@ interface PasskeyIndexerWalletResponse {
   signers: PasskeyIndexerSignerJson[];
 }
 
-/** A wallet row from a `GET /api/lookup/*` response. */
-interface PasskeyIndexerWalletRef {
-  contract_id: string;
-  generation: "legacy" | "v1";
-  signer_count: number;
-}
-
-/** Response from either `GET /api/lookup/*` route. */
-interface PasskeyIndexerLookupResponse {
-  wallets: PasskeyIndexerWalletRef[];
-  count: number;
-}
-
 export interface MercuryIndexerConfig {
   /**
    * Hosted passkey-indexer base URL, e.g.
@@ -118,8 +107,7 @@ export interface MercuryIndexerConfig {
    */
   rpc?: Server;
   /**
-   * Deps that let `findWallets` confirm a candidate by deterministic derivation
-   * from the keyId, skipping an RPC round-trip.
+   * @deprecated Derivation no longer confirms wallet ownership. Configure `rpc`.
    */
   hardening?: FindWalletsHardeningDeps;
   /** Injectable fetch (tests / non-global runtimes). Defaults to global `fetch`. */
@@ -239,7 +227,7 @@ export class MercuryIndexer implements SignerIndexer {
     );
   }
 
-  async findWallets(key: SignerKey): Promise<string[]> {
+  async findWallets(key: SignerKey): Promise<WalletCandidateLookup> {
     // Secp256r1 keys are looked up by hex credential id; ed25519/policy keys by
     // their strkey address. The SDK carries the Secp256r1 keyId as base64url, so
     // convert to the hex the credential-id route expects.
@@ -247,65 +235,49 @@ export class MercuryIndexer implements SignerIndexer {
       key.key === "Secp256r1"
         ? `/api/lookup/${base64url.toBuffer(key.value).toString("hex")}`
         : `/api/lookup/address/${key.value}`;
-    const res = await this.get<PasskeyIndexerLookupResponse>(path);
-    const candidates = res?.wallets.map((w) => w.contract_id) ?? [];
-    return this.confirmCandidates(candidates, key);
+    const res = await this.get<unknown>(path);
+    return this.confirmCandidates(parseLookupResponse(res), key);
   }
 
   /**
-   * Harden the reverse lookup (#598 F3): keep a candidate only if it is either
-   * the deterministic derivation of the keyId OR still holds the signer entry
-   * on-chain — never trust an unverified indexer row.
+   * Keep a candidate only when it still holds the signer entry on-chain.
+   * Live-signer presence is not birth verification; birth fields pass through
+   * unchanged for the kit to check against the creating transaction.
    *
-   * Fail-CLOSED: when candidates exist but no confirmation route
-   * does — no `rpc`, and no usable derivation (`hardening` only covers
-   * Secp256r1 keys) — this throws instead of returning unconfirmed rows. An
-   * unverifiable answer must never be handed to a caller that will route
-   * deposits or identity to it.
+   * Fail-CLOSED: when candidates exist without `rpc`, this throws instead of
+   * returning unconfirmed rows.
    */
   private async confirmCandidates(
-    candidates: string[],
+    lookup: WalletCandidateLookup,
     key: SignerKey
-  ): Promise<string[]> {
-    const { rpc, hardening } = this.config;
+  ): Promise<WalletCandidateLookup> {
+    const { rpc } = this.config;
 
-    const derived =
-      hardening && key.key === "Secp256r1"
-        ? deriveContractAddress(
-            base64url.toBuffer(key.value),
-            hardening.deployerPublicKey,
-            hardening.networkPassphrase
-          )
-        : undefined;
+    if (!lookup.complete) return lookup;
 
-    if (candidates.length > 0 && !rpc && !derived) {
+    if (lookup.candidates.length > 0 && !rpc) {
       throw new IndexerError(
-        "Cannot confirm reverse-lookup candidates: configure `rpc` (any key type) " +
-          "or `hardening` (Secp256r1 derivation) — unconfirmed indexer rows are never returned",
+        "Cannot confirm reverse-lookup candidates: configure `rpc`; " +
+          "unconfirmed indexer rows are never returned",
         PasskeyKitErrorCode.INDEXER_NOT_CONFIGURED,
-        { key: key.key, candidates: candidates.length }
+        { key: key.key, candidates: lookup.candidates.length }
       );
     }
 
-    const confirmed: string[] = [];
-    for (const candidate of candidates) {
-      if (rpc) {
-        // Always prefer the on-chain read, including for the derived address.
-        // Matching derivation is not confirmation: `derive(keyId)` is exactly
-        // the address an attacker can squat, so accepting it unread would
-        // "confirm" the one candidate we have the least reason to trust.
-        // This does not defeat a squat running genuine code with the victim
-        // installed as a signer — nothing checked here can — it only stops
-        // unread rows being handed back as confirmed.
-        const signer = await getSigner({ rpc, spec: walletSpec() }, candidate, key);
-        if (signer) confirmed.push(candidate);
-        continue;
-      }
-      // No rpc: derivation is the only available corroboration (fail-closed
-      // above guarantees one of the two exists).
-      if (candidate === derived) confirmed.push(candidate);
+    if (!rpc || lookup.candidates.length === 0) {
+      return lookup;
     }
-    return confirmed;
+
+    const confirmed: WalletCandidate[] = [];
+    for (const candidate of lookup.candidates) {
+      const signer = await getSigner(
+        { rpc, spec: walletSpec() },
+        candidate.contractId,
+        key
+      );
+      if (signer) confirmed.push(candidate);
+    }
+    return { ...lookup, candidates: confirmed };
   }
 
   async health(): Promise<IndexerHealth> {
@@ -353,6 +325,121 @@ function limitsFromJson(
     out.set(contract, keys === null ? undefined : keys.map(keyFromJson));
   }
   return out;
+}
+
+const HEX_64 = /^[0-9a-f]{64}$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(
+  record: Record<string, unknown>,
+  keys: readonly string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim() !== "") return value.trim();
+  }
+  return undefined;
+}
+
+function parseHex64(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const hex = value.toLowerCase().replace(/^0x/, "");
+  return HEX_64.test(hex) ? hex : undefined;
+}
+
+function parseLedger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 1) {
+    return value;
+  }
+  if (typeof value === "string" && /^(?:0|[1-9]\d*)$/.test(value)) {
+    const ledger = Number(value);
+    return ledger >= 1 ? ledger : undefined;
+  }
+  return undefined;
+}
+
+function parseWalletRef(value: unknown): IncompleteWalletCandidate | undefined {
+  if (!isRecord(value)) return undefined;
+  const contractId = readString(value, ["contract_id", "contractId"]);
+  if (!contractId || !contractId.startsWith("C")) return undefined;
+
+  const candidate: IncompleteWalletCandidate = { contractId };
+  const birthWasmHash = parseHex64(
+    readString(value, ["birth_wasm_hash", "birthWasmHash"])
+  );
+  const creationTransactionHash = parseHex64(
+    readString(value, [
+      "creation_transaction_hash",
+      "creationTransactionHash",
+      "creation_tx",
+    ])
+  );
+  const creationLedger = parseLedger(
+    value.creation_ledger ?? value.creationLedger
+  );
+  if (birthWasmHash) candidate.birthWasmHash = birthWasmHash;
+  if (creationTransactionHash) {
+    candidate.creationTransactionHash = creationTransactionHash;
+  }
+  if (creationLedger !== undefined) candidate.creationLedger = creationLedger;
+  return candidate;
+}
+
+function candidateHasBirth(
+  candidate: IncompleteWalletCandidate
+): candidate is WalletCandidate {
+  return (
+    parseHex64(candidate.birthWasmHash) !== undefined &&
+    parseHex64(candidate.creationTransactionHash) !== undefined &&
+    candidate.creationLedger !== undefined
+  );
+}
+
+/** Map a lookup JSON body onto {@link WalletCandidateLookup} without inventing birth data. */
+function parseLookupResponse(res: unknown): WalletCandidateLookup {
+  if (!isRecord(res)) {
+    return { complete: false, candidates: [] };
+  }
+
+  const rows = Array.isArray(res.wallets)
+    ? res.wallets
+    : Array.isArray(res.candidates)
+      ? res.candidates
+      : [];
+  const candidates: IncompleteWalletCandidate[] = rows
+    .map(parseWalletRef)
+    .filter(
+      (candidate): candidate is IncompleteWalletCandidate =>
+        candidate !== undefined
+    );
+
+  const indexedThroughLedger = parseLedger(
+    res.indexed_through_ledger ?? res.indexedThroughLedger
+  );
+  const claimedComplete = res.complete === true;
+  const complete =
+    res.schema === 2 &&
+    claimedComplete &&
+    indexedThroughLedger !== undefined &&
+    candidates.every(candidateHasBirth);
+
+  if (complete) {
+    return {
+      complete: true,
+      schema: 2,
+      indexedThroughLedger,
+      candidates: candidates.filter(candidateHasBirth),
+    };
+  }
+  return {
+    complete: false,
+    ...(typeof res.schema === "number" ? { schema: res.schema } : {}),
+    ...(indexedThroughLedger !== undefined ? { indexedThroughLedger } : {}),
+    candidates,
+  };
 }
 
 /** Map a fully-decoded passkey-indexer signer row onto a {@link WalletSigner}. */

@@ -104,6 +104,8 @@ export async function createPasskey(
 export interface AuthenticatedPasskey {
   keyId: string;
   keyIdBuffer: Buffer;
+  /** Raw random challenge used by this authentication ceremony. */
+  challenge: Buffer;
   rawResponse: AuthenticationResponseJSON;
 }
 
@@ -113,13 +115,20 @@ export interface AuthenticatedPasskey {
  * `connectWallet` to discover which passkey the user picked.
  */
 export async function authenticatePasskey(
-  deps: WebAuthnDeps
+  deps: WebAuthnDeps,
+  keyId?: string | Uint8Array
 ): Promise<AuthenticatedPasskey> {
+  const challenge = generateChallenge();
+  const requestedKeyId =
+    keyId instanceof Uint8Array ? base64url(Buffer.from(keyId)) : keyId;
   const optionsJSON: PublicKeyCredentialRequestOptionsJSON = {
-    challenge: generateChallenge(),
+    challenge,
     rpId: deps.rpId,
     userVerification: "preferred",
     timeout: WEBAUTHN_TIMEOUT_MS,
+    ...(requestedKeyId
+      ? { allowCredentials: [{ id: requestedKeyId, type: "public-key" as const }] }
+      : {}),
   };
 
   let rawResponse: AuthenticationResponseJSON;
@@ -136,6 +145,7 @@ export async function authenticatePasskey(
   return {
     keyId: rawResponse.id,
     keyIdBuffer: base64url.toBuffer(rawResponse.id),
+    challenge: base64url.toBuffer(challenge),
     rawResponse,
   };
 }

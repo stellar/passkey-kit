@@ -1,8 +1,9 @@
 #![no_std]
 
-use soroban_sdk::{auth::Context, contractclient, Address, BytesN, Env, Vec};
-use types::{Error, Signer, SignerKey, SignerVal};
+use soroban_sdk::{auth::Context, contractclient, Address, Bytes, BytesN, Env, Vec};
+use types::{Error, Secp256r1BindingRecord, Secp256r1Signature, Signer, SignerKey, SignerVal};
 
+pub mod binding;
 pub mod events;
 pub mod types;
 
@@ -16,22 +17,56 @@ pub trait SmartWalletInterface {
     /// `SignerExpiration(None)` (any limits) — or the constructor fails with
     /// `Error::LastSigner`: a wallet born with only a Temporary or expiring
     /// signer could reach zero live signers with no contract call to stop it.
-    fn __constructor(env: Env, signer: Signer);
-    /// Add a new signer. Requires wallet auth. Fails if the signer key
-    /// already exists. Policy signers get their `install` hook invoked.
+    ///
+    /// The first signer MUST also leave the wallet with a durable ADMIN
+    /// (`Error::LastAdminSigner` otherwise). A durable-but-unprivileged first
+    /// signer — `SignerLimits(Some(empty))`, say — would produce a wallet
+    /// nobody can ever authorize, which is unrecoverable and can hold funds.
+    ///
+    /// A `Secp256r1` first signer MUST carry `proof`: a WebAuthn assertion by
+    /// that passkey over the GENESIS binding challenge (see `binding`), which
+    /// commits to the network, this address, the purpose, and the complete
+    /// signer value. The proof is verified and stored as a
+    /// `Secp256r1BindingRecord`. A missing proof fails with
+    /// `Error::BindingProofRequired`; a proof for any other signer kind fails
+    /// with `Error::BindingProofUnexpected`; an ADD-purpose proof fails the
+    /// challenge comparison.
+    fn __constructor(env: Env, signer: Signer, proof: Option<Secp256r1Signature>);
+    /// Add a new Ed25519 or Policy signer. Requires wallet auth. Fails if the
+    /// signer key already exists. Policy signers get their `install` hook
+    /// invoked. A `Secp256r1` signer is REJECTED here with
+    /// `Error::BindingProofRequired` — passkeys enter through
+    /// `add_secp256r1` with a binding proof.
     fn add_signer(env: Env, signer: Signer) -> Result<(), Error>;
+    /// Add a new Secp256r1 signer with its binding proof. Requires wallet
+    /// auth. The proof is verified against the signer's public key over this
+    /// wallet's ADD binding challenge — which commits to the complete signer
+    /// value — and is stored with the signer, in the signer's durability.
+    /// Fails with `Error::BindingProofUnexpected` for a non-Secp256r1 signer,
+    /// `Error::SignerAlreadyExists` for a live key id, and with the WebAuthn
+    /// errors for a bad proof. A GENESIS-purpose proof fails the challenge
+    /// comparison, as does any proof for a different signer shape.
+    fn add_secp256r1(env: Env, signer: Signer, proof: Secp256r1Signature) -> Result<(), Error>;
     /// Replace an existing signer's value and/or storage durability.
     /// Requires wallet auth. Fails if the signer key does not exist. Fails
     /// with `Error::LastAdminSigner`/`Error::LastSigner` if the update would
     /// demote the wallet's last durable admin / last durable signer (see
     /// `remove_signer` — a demotion to Temporary or to an expiring value is
     /// treated the same as a removal, deferred).
+    ///
+    /// A Secp256r1 signer's public key is IMMUTABLE — the binding proof
+    /// commits to it — so a value carrying a different key fails with
+    /// `Error::BindingPublicKeyImmutable`. Mutable policy fields (expiration,
+    /// limits, storage) MAY change; the binding record keeps the ORIGINAL
+    /// signer it attests to and follows a durability move.
     fn update_signer(env: Env, signer: Signer) -> Result<(), Error>;
     /// Remove a signer. Requires wallet auth. Removal is pure wallet state:
     /// NO policy code runs on this path, so a rejecting or broken policy can
     /// never block its own removal. Policy signers self-clean their
     /// install-state afterwards via the permissionless `PolicyInterface::
-    /// uninstall` entrypoint.
+    /// uninstall` entrypoint. A Secp256r1 signer's binding record is removed
+    /// with it; re-adding the key needs a fresh proof through
+    /// `add_secp256r1`.
     ///
     /// Fails with `Error::LastAdminSigner` if the target is the wallet's
     /// LAST durable admin signer (`Persistent` + non-expiring + independently
@@ -64,6 +99,12 @@ pub trait SmartWalletInterface {
     /// Returns the raw stored value — expiration is NOT filtered; check
     /// `SignerExpiration` client-side.
     fn get_signer(env: Env, signer_key: SignerKey) -> Option<SignerVal>;
+    /// Return the binding record for a Secp256r1 signer, or `None` if the
+    /// signer is absent, unbound, or the record's signer does not carry the
+    /// live signer's key id and public key. The proof inside is the holder's
+    /// original assertion: clients MUST re-verify it themselves (see
+    /// `binding`) rather than trust its presence.
+    fn get_secp256r1_binding(env: Env, key_id: Bytes) -> Option<Secp256r1BindingRecord>;
 }
 
 #[contractclient(name = "PolicyClient")]

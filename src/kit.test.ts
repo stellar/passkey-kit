@@ -1,157 +1,167 @@
 /**
- * `connectWallet` resolution + verification behavior:
+ * `PasskeyKit` no-factory release behavior:
  *
- * - Address resolution uses local storage, then the injected indexer, then
- *   deterministic derivation LAST. A primary stored row is still a deployment
- *   prediction, so only an explicitly secondary association is trusted state.
- * - A transport error on the derived-address instance read PROPAGATES — it must
- *   never be misread as not-found (derivation is reached only when storage and
- *   the indexer both miss).
- * - A failed opt-in `verifyWasmHash` leaves the kit disconnected, so a
- *   subsequent `sign` cannot operate on the rejected contract.
+ * - Discovery uses verified local storage OR one complete, non-stale indexer
+ *   response; there is no derivation-only connect and no legacy bypass flags.
+ * - Every candidate must prove its immutable birth through RPC, run accepted
+ *   current code, hold the live signer, pass the binding record + fresh
+ *   assertion, and be the ONLY candidate that passes.
+ * - `createWallet` never persists until `confirmWalletCreation` verifies birth.
+ * - `addSecp256r1` copies the connected wallet's verified birth metadata.
+ * - Restore-source resolution is preserved.
+ *
+ * Birth verification runs for real against crafted CreateContractV2 envelopes;
+ * the WebAuthn provenance glue is exercised end-to-end in
+ * `kit.provenance.test.ts`, so selection tests stub `assertSignerProvenance`.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Keypair, Networks, xdr } from "@stellar/stellar-sdk";
-import type { Spec as ContractSpec } from "@stellar/stellar-sdk/contract";
-import { Client as PasskeyClient, type SignerVal } from "passkey-kit-sdk";
-import { PasskeyKit } from "./kit.js";
-import { SignerStore } from "./types.js";
+import {
+  Account,
+  Address,
+  Keypair,
+  Networks,
+  Operation,
+  StrKey,
+  TransactionBuilder,
+  hash,
+  xdr,
+} from "@stellar/stellar-sdk";
+import { Api } from "@stellar/stellar-sdk/rpc";
+import { PasskeyKit, type PasskeyKitConfig } from "./kit.js";
+import { SignerStore, type StoredPasskey } from "./types.js";
 import { MemoryStorage } from "./storage/memory.js";
-import { WalletOwnershipError } from "./errors.js";
-import { SIGNER_VAL_UDT } from "./kit/auth-payload.js";
+import { ConfigurationError, WalletAmbiguousError, WalletOwnershipError } from "./errors.js";
 import base64url from "./base64url.js";
 
-const WASM_HASH = "ab".repeat(32);
+const WASM_HASH = "ab".repeat(32); // accepted birth + current code
+const EVIL_HASH = "cd".repeat(32); // unaccepted birth (evil-birth wasm)
 const KEY_ID = Buffer.alloc(16, 7);
 const KEY_ID_B64 = base64url.encode(KEY_ID);
-const INDEXED_WALLET = "CC2R2H3DTXS7OCNV3FTNPAZYIRCY2L2OTBG5FZWJV63HXQ35WB2T2NWJ";
-const STORED_WALLET = "CDXICVKLHPPAZ3EM65OESOGBSQE4YQGFN6JK7ICPYUXDAQPAVXBZ4PAT";
+const PUBLIC_KEY = Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]);
+const BINDING_PROOF = {
+  authenticator_data: Buffer.alloc(37),
+  client_data_json: Buffer.from("{}"),
+  signature: Buffer.alloc(64),
+};
+const RP_ID = "app.example";
+const ORIGIN = "https://app.example";
 
-function makeKit(
-  storage?: MemoryStorage,
-  overrides?: { acceptedWasmHashes?: string[] }
-): PasskeyKit {
+// A minimal but shape-valid discovery assertion the kit re-runs before verifying
+// candidates. Its signature is never checked here because `assertSignerProvenance`
+// is stubbed in the selection tests.
+const AUTH_RESPONSE = {
+  id: KEY_ID_B64,
+  rawId: KEY_ID_B64,
+  type: "public-key" as const,
+  clientExtensionResults: {},
+  response: {
+    authenticatorData: base64url.encode(Buffer.alloc(37)),
+    clientDataJSON: base64url.encode(Buffer.from("{}")),
+    signature: base64url.encode(Buffer.from([0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01])),
+  },
+};
+
+function makeKit(storage?: MemoryStorage, overrides?: Partial<PasskeyKitConfig>): PasskeyKit {
   return new PasskeyKit({
     rpcUrl: "https://rpc.example",
     networkPassphrase: Networks.TESTNET,
     walletWasmHash: WASM_HASH,
+    rpId: RP_ID,
+    allowedOrigins: [ORIGIN],
     storage,
-    ...overrides,
     WebAuthn: {
       startRegistration: vi.fn(),
-      startAuthentication: vi.fn(),
+      startAuthentication: vi.fn(async () => AUTH_RESPONSE),
     } as never,
+    ...overrides,
   });
 }
 
-describe("restore source resolution", () => {
-  /** Read the keypair the kit wired into SubmissionManager for restores. */
-  const restoreKeypairOf = (kit: PasskeyKit) =>
-    (kit as unknown as { submissionManager: { deps: { restoreKeypair?: { publicKey(): string } } } })
-      .submissionManager.deps.restoreKeypair;
+// --- Birth-transaction fixtures --------------------------------------------
 
-  const base = {
-    rpcUrl: "https://rpc.example",
+interface Birth {
+  contractId: string;
+  txHash: string;
+  envelopeXdr: string;
+  ledger: number;
+  wasmHash: string;
+}
+
+/** Craft a real CreateContractV2 transaction and the address it creates. */
+function makeBirth(saltSeed: number, wasmHex: string, ledger: number): Birth {
+  const deployer = Keypair.random().publicKey();
+  const salt = Buffer.alloc(32, saltSeed);
+  const preimage = xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+    new xdr.ContractIdPreimageFromAddress({
+      address: Address.fromString(deployer).toScAddress(),
+      salt,
+    })
+  );
+  const func = xdr.HostFunction.hostFunctionTypeCreateContractV2(
+    new xdr.CreateContractArgsV2({
+      contractIdPreimage: preimage,
+      executable: xdr.ContractExecutable.contractExecutableWasm(Buffer.from(wasmHex, "hex")),
+      constructorArgs: [],
+    })
+  );
+  const source = new Account(deployer, "0");
+  const tx = new TransactionBuilder(source, {
+    fee: "100",
     networkPassphrase: Networks.TESTNET,
-    walletWasmHash: WASM_HASH,
-    WebAuthn: { startRegistration: vi.fn(), startAuthentication: vi.fn() } as never,
+  })
+    .addOperation(Operation.invokeHostFunction({ func, auth: [] }))
+    .setTimeout(30)
+    .build();
+
+  const contractId = StrKey.encodeContract(
+    hash(
+      xdr.HashIdPreimage.envelopeTypeContractId(
+        new xdr.HashIdPreimageContractId({
+          networkId: hash(Buffer.from(Networks.TESTNET)),
+          contractIdPreimage: preimage,
+        })
+      ).toXDR()
+    )
+  );
+
+  return {
+    contractId,
+    txHash: tx.hash().toString("hex"),
+    envelopeXdr: tx.toEnvelope().toXDR("base64"),
+    ledger,
+    wasmHash: wasmHex,
   };
-
-  it("leaves restores unconfigured for the SHARED default deployer", () => {
-    // The shared deployer must never source or fund a transaction, so there is
-    // deliberately no fallback — restoreFootprint fails closed until the
-    // integrator supplies a funded restoreSource.
-    expect(restoreKeypairOf(new PasskeyKit({ ...base }))).toBeUndefined();
-  });
-
-  it("falls back to a CUSTOM funded deploySource (address-preserving)", () => {
-    const custom = Keypair.random();
-    const kit = new PasskeyKit({ ...base, deploySource: custom.secret() });
-    // Custom deployers keep their pre-existing ability to source restores; their
-    // derived addresses are unaffected because the deployer identity is unchanged.
-    expect(restoreKeypairOf(kit)?.publicKey()).toBe(custom.publicKey());
-  });
-
-  it("prefers an explicit restoreSource over the custom deploySource", () => {
-    const custom = Keypair.random();
-    const restore = Keypair.random();
-    const kit = new PasskeyKit({
-      ...base,
-      deploySource: custom.secret(),
-      restoreSource: restore.secret(),
-    });
-    expect(restoreKeypairOf(kit)?.publicKey()).toBe(restore.publicKey());
-  });
-});
-
-describe("createWallet connection state", () => {
-  it("stores a primary prediction but remains disconnected before submission", async () => {
-    const storage = new MemoryStorage();
-    const kit = makeKit(storage);
-    const submissionManager = (
-      kit as unknown as {
-        submissionManager: {
-          buildDeployTransaction: (...args: unknown[]) => Promise<unknown>;
-          signDeploy: (tx: unknown) => Promise<string>;
-        };
-      }
-    ).submissionManager;
-    const created = {
-      rawResponse: {} as never,
-      keyId: KEY_ID_B64,
-      keyIdBuffer: KEY_ID,
-      publicKey: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
-    };
-    const deployTx = { result: { options: { contractId: STORED_WALLET } } };
-
-    vi.spyOn(kit, "createKey").mockResolvedValue(created);
-    vi.spyOn(submissionManager, "buildDeployTransaction").mockResolvedValue(
-      deployTx
-    );
-    vi.spyOn(submissionManager, "signDeploy").mockResolvedValue("signed-xdr");
-
-    await expect(kit.createWallet("App", "User")).resolves.toMatchObject({
-      contractId: STORED_WALLET,
-      signedTx: "signed-xdr",
-    });
-
-    expect(kit.wallet).toBeUndefined();
-    expect(kit.keyId).toBeUndefined();
-    await expect(storage.get(KEY_ID_B64)).resolves.toMatchObject({
-      contractId: STORED_WALLET,
-      isPrimary: true,
-    });
-  });
-});
-
-/** A ledger entry whose contractData().val() decodes to a live SignerVal. */
-function signerEntry() {
-  const spec = (
-    new PasskeyClient({
-      contractId: INDEXED_WALLET,
-      networkPassphrase: Networks.TESTNET,
-      rpcUrl: "https://rpc.example",
-    }) as unknown as { spec: ContractSpec }
-  ).spec;
-  const signerVal: SignerVal = {
-    tag: "Secp256r1",
-    values: [
-      Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
-      [undefined],
-      [undefined],
-    ],
-  };
-  const scVal = spec.nativeToScVal(signerVal, SIGNER_VAL_UDT);
-  return { val: { contractData: () => ({ val: () => scVal }) } };
 }
 
-/** An instance-shaped entry for the bare "does the instance exist" probe. */
-function instanceEntry() {
-  return { val: { contractData: () => ({ val: () => xdr.ScVal.scvVoid() }) } };
+const candidateOf = (birth: Birth) => ({
+  contractId: birth.contractId,
+  birthWasmHash: birth.wasmHash,
+  creationTransactionHash: birth.txHash,
+  creationLedger: birth.ledger,
+});
+
+function completeLookup(births: Birth[], indexedThroughLedger: number) {
+  return {
+    schema: 2 as const,
+    complete: true as const,
+    indexedThroughLedger,
+    candidates: births.map(candidateOf),
+  };
 }
 
-/** Fake `getContractData` result carrying a WASM executable hash. */
+/** A `getTransaction` stub that answers SUCCESS for the given births. */
+function txStub(births: Birth[]) {
+  const byHash = new Map(
+    births.map((b) => [
+      b.txHash,
+      { status: Api.GetTransactionStatus.SUCCESS, ledger: b.ledger, envelopeXdr: b.envelopeXdr },
+    ])
+  );
+  return vi.fn(async (h: string) => byHash.get(h) ?? { status: Api.GetTransactionStatus.NOT_FOUND });
+}
+
+/** `getContractData` result carrying a WASM executable hash. */
 function instanceWithWasm(hashHex: string) {
   return {
     val: {
@@ -169,344 +179,403 @@ function instanceWithWasm(hashHex: string) {
   };
 }
 
-describe("connectWallet address resolution", () => {
-  let kit: PasskeyKit;
+function liveSignerVal() {
+  return { tag: "Secp256r1", values: [PUBLIC_KEY, [undefined], [undefined]] };
+}
+
+/** Wire the current-code, live-signer, and provenance stubs a passing candidate needs. */
+function stubProvenance(kit: PasskeyKit, opts: { liveSigner?: unknown } = {}) {
+  vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(instanceWithWasm(WASM_HASH) as never);
+  vi.spyOn(
+    (kit as unknown as { signerManager: { getSigner: unknown } }).signerManager as never,
+    "getSigner"
+  ).mockResolvedValue(
+    ("liveSigner" in opts ? opts.liveSigner : liveSignerVal()) as never
+  );
+  vi.spyOn(kit as never, "assertSignerProvenance" as never).mockResolvedValue(undefined as never);
+}
+
+function storedPasskeyFrom(birth: Birth): StoredPasskey {
+  return {
+    keyId: KEY_ID_B64,
+    publicKey: PUBLIC_KEY,
+    contractId: birth.contractId,
+    birthWasmHash: birth.wasmHash,
+    creationTransactionHash: birth.txHash,
+    creationLedger: birth.ledger,
+    createdAt: 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Restore-source resolution (preserved)
+// ---------------------------------------------------------------------------
+
+describe("restore source resolution", () => {
+  const restoreKeypairOf = (kit: PasskeyKit) =>
+    (
+      kit as unknown as {
+        submissionManager: { deps: { restoreKeypair?: { publicKey(): string } } };
+      }
+    ).submissionManager.deps.restoreKeypair;
+
+  const base = {
+    rpcUrl: "https://rpc.example",
+    networkPassphrase: Networks.TESTNET,
+    walletWasmHash: WASM_HASH,
+    rpId: RP_ID,
+    allowedOrigins: [ORIGIN],
+    WebAuthn: { startRegistration: vi.fn(), startAuthentication: vi.fn() } as never,
+  };
+
+  it("leaves restores unconfigured for the SHARED default deployer", () => {
+    expect(restoreKeypairOf(new PasskeyKit({ ...base }))).toBeUndefined();
+  });
+
+  it("falls back to a CUSTOM funded deploySource (address-preserving)", () => {
+    const custom = Keypair.random();
+    const kit = new PasskeyKit({ ...base, deploySource: custom.secret() });
+    expect(restoreKeypairOf(kit)?.publicKey()).toBe(custom.publicKey());
+  });
+
+  it("prefers an explicit restoreSource over the custom deploySource", () => {
+    const custom = Keypair.random();
+    const restore = Keypair.random();
+    const kit = new PasskeyKit({
+      ...base,
+      deploySource: custom.secret(),
+      restoreSource: restore.secret(),
+    });
+    expect(restoreKeypairOf(kit)?.publicKey()).toBe(restore.publicKey());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WebAuthn verification config
+// ---------------------------------------------------------------------------
+
+describe("WebAuthn verification config", () => {
+  it("requires rpId and allowedOrigins before minting a binding proof", async () => {
+    // No rpId/allowedOrigins and no browser globals: provenance config fails closed.
+    const kit = new PasskeyKit({
+      rpcUrl: "https://rpc.example",
+      networkPassphrase: Networks.TESTNET,
+      walletWasmHash: WASM_HASH,
+      WebAuthn: { startRegistration: vi.fn(), startAuthentication: vi.fn() } as never,
+    });
+    vi.spyOn(kit, "createKey").mockResolvedValue({
+      rawResponse: {} as never,
+      keyId: KEY_ID_B64,
+      keyIdBuffer: KEY_ID,
+      publicKey: PUBLIC_KEY,
+    } as never);
+    vi.spyOn(
+      (kit as unknown as { submissionManager: { deriveWalletAddress: unknown } })
+        .submissionManager as never,
+      "deriveWalletAddress"
+    ).mockReturnValue("CC2R2H3DTXS7OCNV3FTNPAZYIRCY2L2OTBG5FZWJV63HXQ35WB2T2NWJ" as never);
+
+    await expect(kit.createWallet("App", "User")).rejects.toBeInstanceOf(ConfigurationError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// connectWallet — candidate discovery + birth-gated verification
+// ---------------------------------------------------------------------------
+
+describe("connectWallet discovery", () => {
+  let birth: Birth;
 
   beforeEach(() => {
-    kit = makeKit();
-    // Untrusted resolution (indexer/derivation) now binds code identity before
-    // reading signer state, so these paths perform an instance read. Accepted
-    // code by default; the rejection cases live in their own describe below.
-    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
-      instanceWithWasm(WASM_HASH) as never
-    );
+    birth = makeBirth(0x01, WASM_HASH, 40);
   });
 
-  it("prefers an explicit secondary association without a code check", async () => {
-    // The security fix: a stored association wins outright, so a secondary
-    // passkey never resolves to derive(keyId) even if an attacker squatted code
-    // there. `getLedgerEntries` is only the ownership check on the stored wallet.
-    const storage = new MemoryStorage();
-    await storage.save({
-      keyId: KEY_ID_B64,
-      publicKey: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
-      contractId: STORED_WALLET,
-      isPrimary: false,
-      createdAt: 0,
-    });
-    const kitS = makeKit(storage);
-    const getLedgerEntries = vi
-      .spyOn(kitS.rpc, "getLedgerEntries")
-      // ownership check on the stored wallet (temporary durability): found
-      .mockResolvedValueOnce({ entries: [signerEntry()] } as never);
-    const getContractId = vi.fn(async () => INDEXED_WALLET);
-
-    const result = await kitS.connectWallet({ keyId: KEY_ID_B64, getContractId });
-
-    expect(result.contractId).toBe(STORED_WALLET);
-    expect(kitS.contractId).toBe(STORED_WALLET);
-    // Neither the indexer nor the derived-address instance probe was consulted.
-    expect(getContractId).not.toHaveBeenCalled();
-    expect(getLedgerEntries).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses the indexer when storage misses — derivation is not consulted", async () => {
-    const getLedgerEntries = vi
-      .spyOn(kit.rpc, "getLedgerEntries")
-      // ownership check on the indexer-resolved wallet (temporary durability)
-      .mockResolvedValueOnce({ entries: [signerEntry()] } as never);
-    const getContractId = vi.fn(async () => INDEXED_WALLET);
-
-    const result = await kit.connectWallet({ keyId: KEY_ID_B64, getContractId });
-
-    expect(getContractId).toHaveBeenCalledWith(KEY_ID_B64);
-    expect(result.contractId).toBe(INDEXED_WALLET);
-    expect(kit.contractId).toBe(INDEXED_WALLET);
-    // Only the ownership read ran — no derived-address instance probe.
-    expect(getLedgerEntries).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to deterministic derivation only when storage AND indexer miss", async () => {
-    vi.spyOn(kit.rpc, "getLedgerEntries")
-      // 1) derived-address instance probe: found
-      .mockResolvedValueOnce({ entries: [instanceEntry()] } as never)
-      // 2) ownership check (temporary durability): found
-      .mockResolvedValueOnce({ entries: [signerEntry()] } as never);
-    const getContractId = vi.fn(async () => undefined);
-
-    const result = await kit.connectWallet({ keyId: KEY_ID_B64, getContractId });
-
-    // The indexer was tried first and missed, so derivation resolved it.
-    expect(getContractId).toHaveBeenCalledWith(KEY_ID_B64);
-    expect(result.contractId).not.toBe(INDEXED_WALLET);
-    expect(result.contractId).toMatch(/^C/);
-  });
-
-  it("propagates a transport error on the derivation read — no not-found misread", async () => {
-    // Reached only after storage + indexer miss; a 429 there must not be treated
-    // as an authoritative not-found.
-    vi.spyOn(kit.rpc, "getLedgerEntries").mockRejectedValue(
-      new Error("429 too many requests")
-    );
-    const getContractId = vi.fn(async () => undefined);
-
-    await expect(
-      kit.connectWallet({ keyId: KEY_ID_B64, getContractId })
-    ).rejects.toThrow("429");
-
-    expect(getContractId).toHaveBeenCalledWith(KEY_ID_B64);
-    expect(kit.wallet).toBeUndefined();
-    expect(kit.keyId).toBeUndefined();
-  });
-
-  it("disconnects on an ownership mismatch (keyId not a signer)", async () => {
-    vi.spyOn(kit.rpc, "getLedgerEntries")
-      .mockResolvedValueOnce({ entries: [instanceEntry()] } as never) // instance
-      .mockResolvedValueOnce({ entries: [] } as never) // signer: temporary
-      .mockResolvedValueOnce({ entries: [] } as never); // signer: persistent
-
-    await expect(
-      kit.connectWallet({ keyId: KEY_ID_B64 })
-    ).rejects.toBeInstanceOf(WalletOwnershipError);
-    expect(kit.wallet).toBeUndefined();
-    expect(kit.keyId).toBeUndefined();
-  });
-});
-
-describe("addSecp256r1 persistence", () => {
-  const NEW_KEY_ID = base64url.encode(Buffer.alloc(16, 9));
-  const NEW_PUBKEY = Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xa9)]);
-
-  it("records the new keyId → connected-wallet mapping so a later connect is storage-first", async () => {
-    const storage = new MemoryStorage();
-    const kit = makeKit(storage);
-    // Pretend a wallet is connected (add_signer is wallet-authorized).
-    kit.wallet = { options: { contractId: STORED_WALLET } } as never;
-    // Stub the build so no real tx is assembled.
-    vi.spyOn(
-      (kit as unknown as { signerManager: { addSecp256r1: unknown } })
-        .signerManager as never,
-      "addSecp256r1"
-    ).mockResolvedValue("AT_ADD" as never);
-
-    const tx = await kit.addSecp256r1(
-      NEW_KEY_ID,
-      NEW_PUBKEY,
-      undefined as never,
-      SignerStore.Persistent
-    );
-
-    expect(tx).toBe("AT_ADD");
-    const stored = await storage.get(NEW_KEY_ID);
-    expect(stored?.contractId).toBe(STORED_WALLET);
-    expect(stored?.isPrimary).toBe(false);
-    expect(Buffer.from(stored!.publicKey)).toEqual(NEW_PUBKEY);
-  });
-
-  it("does not persist when no wallet is connected", async () => {
-    const storage = new MemoryStorage();
-    const kit = makeKit(storage);
-    vi.spyOn(
-      (kit as unknown as { signerManager: { addSecp256r1: unknown } })
-        .signerManager as never,
-      "addSecp256r1"
-    ).mockResolvedValue("AT_ADD" as never);
-
-    await kit.addSecp256r1(
-      NEW_KEY_ID,
-      NEW_PUBKEY,
-      undefined as never,
-      SignerStore.Persistent
-    );
-
-    expect(await storage.get(NEW_KEY_ID)).toBeNull();
-  });
-});
-
-describe("connectWallet code identity (default-on for untrusted resolution)", () => {
-  it("checks a stored primary deployment prediction before signer state", async () => {
-    const storage = new MemoryStorage();
-    await storage.save({
-      keyId: KEY_ID_B64,
-      publicKey: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
-      contractId: STORED_WALLET,
-      isPrimary: true,
-      createdAt: 0,
-    });
-    const kit = makeKit(storage);
-    const signerRead = vi.spyOn(kit.rpc, "getLedgerEntries");
-    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
-      instanceWithWasm("cd".repeat(32)) as never
-    );
-
-    await expect(
-      kit.connectWallet({ keyId: KEY_ID_B64 })
-    ).rejects.toBeInstanceOf(WalletOwnershipError);
-
-    expect(signerRead).not.toHaveBeenCalled();
-    expect(kit.wallet).toBeUndefined();
-  });
-
-  it("checks a legacy stored row instead of assuming trusted provenance", async () => {
-    const storage = new MemoryStorage();
-    await storage.save({
-      keyId: KEY_ID_B64,
-      publicKey: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
-      contractId: STORED_WALLET,
-      createdAt: 0,
-    });
-    const kit = makeKit(storage);
-    const codeRead = vi
-      .spyOn(kit.rpc, "getContractData")
-      .mockResolvedValue(instanceWithWasm(WASM_HASH) as never);
-    vi.spyOn(kit.rpc, "getLedgerEntries").mockResolvedValue({
-      entries: [signerEntry()],
-    } as never);
-
-    await expect(
-      kit.connectWallet({ keyId: KEY_ID_B64 })
-    ).resolves.toMatchObject({ contractId: STORED_WALLET });
-
-    expect(codeRead).toHaveBeenCalled();
-  });
-
-  it("REJECTS an indexer row running unaccepted code, with no opt-in", async () => {
-    // The reverse lookup is a claim by an untrusted party: any contract can emit
-    // the signer events an indexer keys on AND write the signer ledger entry we
-    // read back, so signer state alone proves nothing. Binding accepted code is
-    // what makes that state meaningful. No flag is passed here on purpose.
+  it("rejects an incomplete indexer lookup", async () => {
     const kit = makeKit();
-    const getLedgerEntries = vi
-      .spyOn(kit.rpc, "getLedgerEntries")
-      .mockResolvedValue({ entries: [signerEntry()] } as never);
-    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
-      instanceWithWasm("cd".repeat(32)) as never // not the accepted hash
-    );
+    stubProvenance(kit);
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
 
     await expect(
       kit.connectWallet({
         keyId: KEY_ID_B64,
-        getContractId: async () => INDEXED_WALLET,
+        getWalletCandidates: async () => ({ complete: false, candidates: [] }),
       })
     ).rejects.toBeInstanceOf(WalletOwnershipError);
-
-    expect(kit.wallet).toBeUndefined();
-    expect(kit.keyId).toBeUndefined();
-    // Code identity is bound BEFORE any signer read — a forged signer entry on
-    // attacker-authored code must never be consulted at all.
-    expect(getLedgerEntries).not.toHaveBeenCalled();
   });
 
-  it("does NOT check an explicit secondary association, so an upgraded wallet opens", async () => {
-    const storage = new MemoryStorage();
-    await storage.save({
-      keyId: KEY_ID_B64,
-      publicKey: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xc1)]),
-      contractId: STORED_WALLET,
-      isPrimary: false,
-      createdAt: 0,
-    });
-    const kitS = makeKit(storage);
-    vi.spyOn(kitS.rpc, "getLedgerEntries").mockResolvedValueOnce({
-      entries: [signerEntry()],
-    } as never);
-    const getContractData = vi
-      .spyOn(kitS.rpc, "getContractData")
-      .mockResolvedValue(instanceWithWasm("cd".repeat(32)) as never);
-
-    const result = await kitS.connectWallet({ keyId: KEY_ID_B64 });
-
-    expect(result.contractId).toBe(STORED_WALLET);
-    expect(getContractData).not.toHaveBeenCalled();
-  });
-
-  it("accepts any hash on the allowlist, not just the deploy hash", async () => {
-    const UPGRADED = "ef".repeat(32);
-    const kit = makeKit(undefined, { acceptedWasmHashes: [WASM_HASH, UPGRADED] });
-    vi.spyOn(kit.rpc, "getLedgerEntries").mockResolvedValue({
-      entries: [signerEntry()],
-    } as never);
-    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
-      instanceWithWasm(UPGRADED) as never
-    );
-
-    const result = await kit.connectWallet({
-      keyId: KEY_ID_B64,
-      getContractId: async () => INDEXED_WALLET,
-    });
-
-    expect(result.contractId).toBe(INDEXED_WALLET);
-  });
-
-  it("lets a caller opt out explicitly", async () => {
+  it("rejects a lookup whose indexedThroughLedger is below the pre-lookup RPC ledger", async () => {
     const kit = makeKit();
-    vi.spyOn(kit.rpc, "getLedgerEntries").mockResolvedValue({
-      entries: [signerEntry()],
-    } as never);
-    const getContractData = vi
-      .spyOn(kit.rpc, "getContractData")
-      .mockResolvedValue(instanceWithWasm("cd".repeat(32)) as never);
+    stubProvenance(kit);
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 100 } as never);
+
+    const error = await kit
+      .connectWallet({
+        keyId: KEY_ID_B64,
+        getWalletCandidates: async () => completeLookup([birth], 99),
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(WalletOwnershipError);
+    expect((error as WalletOwnershipError).context).toMatchObject({
+      indexedThroughLedger: 99,
+      requiredLedger: 100,
+    });
+  });
+
+  it("connects when a fresh, complete lookup yields exactly one verified candidate", async () => {
+    const kit = makeKit();
+    stubProvenance(kit);
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(txStub([birth]) as never);
 
     const result = await kit.connectWallet({
       keyId: KEY_ID_B64,
-      getContractId: async () => INDEXED_WALLET,
-      verifyWasmHash: false,
+      getWalletCandidates: async () => completeLookup([birth], 45),
     });
 
-    expect(result.contractId).toBe(INDEXED_WALLET);
-    expect(getContractData).not.toHaveBeenCalled();
-  });
-});
-
-describe("connectWallet verifyWasmHash", () => {
-  let kit: PasskeyKit;
-
-  beforeEach(() => {
-    kit = makeKit();
-    vi.spyOn(kit.rpc, "getLedgerEntries")
-      .mockResolvedValueOnce({ entries: [instanceEntry()] } as never) // instance
-      .mockResolvedValueOnce({ entries: [signerEntry()] } as never); // signer
+    expect(result.contractId).toBe(birth.contractId);
+    expect(kit.contractId).toBe(birth.contractId);
   });
 
-  it("clears wallet/keyId when the WASM hash does not match", async () => {
-    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
-      instanceWithWasm("cd".repeat(32)) as never
-    );
+  it("fails closed when a candidate is missing birth fields", async () => {
+    const kit = makeKit();
+    stubProvenance(kit);
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
+    const getTransaction = vi.spyOn(kit.rpc, "getTransaction");
+
+    const lookup = {
+      schema: 2 as const,
+      complete: true as const,
+      indexedThroughLedger: 45,
+      candidates: [
+        { contractId: birth.contractId, birthWasmHash: "", creationTransactionHash: "", creationLedger: 0 },
+      ],
+    };
 
     await expect(
-      kit.connectWallet({ keyId: KEY_ID_B64, verifyWasmHash: true })
+      kit.connectWallet({ keyId: KEY_ID_B64, getWalletCandidates: async () => lookup })
     ).rejects.toBeInstanceOf(WalletOwnershipError);
+    // Malformed birth metadata is rejected before any RPC round-trip.
+    expect(getTransaction).not.toHaveBeenCalled();
+  });
 
-    // The rejected contract must NOT stay connected (a later sign() would
-    // silently target it).
-    expect(kit.wallet).toBeUndefined();
-    expect(kit.keyId).toBeUndefined();
+  it("requires the birth transaction to be RPC-verified (not found fails closed)", async () => {
+    const kit = makeKit();
+    stubProvenance(kit);
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockResolvedValue({
+      status: Api.GetTransactionStatus.NOT_FOUND,
+    } as never);
+
+    await expect(
+      kit.connectWallet({ keyId: KEY_ID_B64, getWalletCandidates: async () => completeLookup([birth], 45) })
+    ).rejects.toBeInstanceOf(WalletOwnershipError);
+  });
+
+  it("rejects evil birth even when the current code is accepted", async () => {
+    // Custom code was born at the address, then upgraded to accepted WASM. The
+    // immutable birth WASM is not accepted, so the candidate is rejected.
+    const evil = makeBirth(0x02, EVIL_HASH, 41);
+    const kit = makeKit();
+    stubProvenance(kit); // getContractData returns the ACCEPTED current code
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(txStub([evil]) as never);
+
+    await expect(
+      kit.connectWallet({ keyId: KEY_ID_B64, getWalletCandidates: async () => completeLookup([evil], 45) })
+    ).rejects.toBeInstanceOf(WalletOwnershipError);
+  });
+
+  it("rejects an accepted-birth candidate with no live signer for the passkey", async () => {
+    const kit = makeKit();
+    stubProvenance(kit, { liveSigner: null });
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(txStub([birth]) as never);
+
+    await expect(
+      kit.connectWallet({ keyId: KEY_ID_B64, getWalletCandidates: async () => completeLookup([birth], 45) })
+    ).rejects.toBeInstanceOf(WalletOwnershipError);
+  });
+
+  it("raises WalletAmbiguousError when two candidates both fully verify", async () => {
+    const a = makeBirth(0x03, WASM_HASH, 42);
+    const b = makeBirth(0x04, WASM_HASH, 43);
+    const kit = makeKit();
+    stubProvenance(kit);
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(txStub([a, b]) as never);
+
+    const error = await kit
+      .connectWallet({ keyId: KEY_ID_B64, getWalletCandidates: async () => completeLookup([a, b], 45) })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(WalletAmbiguousError);
+    expect((error as WalletAmbiguousError).candidates.sort()).toEqual([a.contractId, b.contractId].sort());
     expect(kit.contractId).toBeUndefined();
   });
 
-  it("clears wallet/keyId when the hash read itself fails", async () => {
-    vi.spyOn(kit.rpc, "getContractData").mockRejectedValue(
-      new Error("503 upstream timeout")
-    );
-
-    await expect(
-      kit.connectWallet({ keyId: KEY_ID_B64, verifyWasmHash: true })
-    ).rejects.toThrow("503");
-    expect(kit.wallet).toBeUndefined();
-    expect(kit.keyId).toBeUndefined();
-  });
-
-  it("stays connected when the WASM hash matches", async () => {
-    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
-      instanceWithWasm(WASM_HASH) as never
-    );
+  it("drops one invalid candidate and connects to the single valid one", async () => {
+    const evil = makeBirth(0x05, EVIL_HASH, 44);
+    const good = makeBirth(0x06, WASM_HASH, 45);
+    const kit = makeKit();
+    stubProvenance(kit);
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(txStub([evil, good]) as never);
 
     const result = await kit.connectWallet({
       keyId: KEY_ID_B64,
-      verifyWasmHash: true,
+      getWalletCandidates: async () => completeLookup([evil, good], 46),
     });
 
-    expect(kit.contractId).toBe(result.contractId);
-    expect(kit.keyId).toBe(KEY_ID_B64);
+    expect(result.contractId).toBe(good.contractId);
+  });
+
+  it("uses a verified local storage candidate and rechecks its birth on-chain", async () => {
+    const storage = new MemoryStorage();
+    await storage.save(storedPasskeyFrom(birth));
+    const kit = makeKit(storage);
+    stubProvenance(kit);
+    const getTransaction = vi
+      .spyOn(kit.rpc, "getTransaction")
+      .mockImplementation(txStub([birth]) as never);
+    const getWalletCandidates = vi.fn();
+
+    const result = await kit.connectWallet({ keyId: KEY_ID_B64, getWalletCandidates });
+
+    expect(result.contractId).toBe(birth.contractId);
+    // Storage is trusted only after the recent creation transaction is re-verified.
+    expect(getTransaction).toHaveBeenCalledWith(birth.txHash);
+    // A verified stored candidate needs no indexer lookup.
+    expect(getWalletCandidates).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createWallet / confirmWalletCreation
+// ---------------------------------------------------------------------------
+
+describe("createWallet persistence", () => {
+  it("stays unpersisted until confirmWalletCreation verifies birth", async () => {
+    const birth = makeBirth(0x11, WASM_HASH, 70);
+    const storage = new MemoryStorage();
+    const kit = makeKit(storage);
+
+    vi.spyOn(kit, "createKey").mockResolvedValue({
+      rawResponse: {} as never,
+      keyId: KEY_ID_B64,
+      keyIdBuffer: KEY_ID,
+      publicKey: PUBLIC_KEY,
+    } as never);
+    const submissionManager = (
+      kit as unknown as {
+        submissionManager: {
+          deriveWalletAddress: unknown;
+          buildDeployTransaction: unknown;
+          signDeploy: unknown;
+        };
+      }
+    ).submissionManager;
+    vi.spyOn(submissionManager as never, "deriveWalletAddress").mockReturnValue(
+      birth.contractId as never
+    );
+    vi.spyOn(kit as never, "createBindingProof" as never).mockResolvedValue(
+      BINDING_PROOF as never
+    );
+    vi.spyOn(submissionManager as never, "buildDeployTransaction").mockResolvedValue({
+      result: { options: { contractId: birth.contractId } },
+    } as never);
+    vi.spyOn(submissionManager as never, "signDeploy").mockResolvedValue("signed-xdr" as never);
+
+    const created = await kit.createWallet("App", "User");
+    expect(created).toMatchObject({ contractId: birth.contractId, signedTx: "signed-xdr" });
+
+    // Nothing is persisted before confirmation.
+    expect(await storage.get(KEY_ID_B64)).toBeNull();
+
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(txStub([birth]) as never);
+    const verified = await kit.confirmWalletCreation(created, birth.txHash);
+
+    expect(verified.birthWasmHash).toBe(WASM_HASH);
+    const stored = await storage.get(KEY_ID_B64);
+    expect(stored).toMatchObject({
+      contractId: birth.contractId,
+      birthWasmHash: WASM_HASH,
+      creationTransactionHash: birth.txHash,
+      creationLedger: birth.ledger,
+    });
+  });
+
+  it("refuses to confirm a wallet whose birth WASM is not accepted", async () => {
+    const evil = makeBirth(0x12, EVIL_HASH, 71);
+    const kit = makeKit(new MemoryStorage());
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(txStub([evil]) as never);
+
+    const created = {
+      rawResponse: {} as never,
+      keyId: KEY_ID,
+      keyIdBase64: KEY_ID_B64,
+      publicKey: PUBLIC_KEY,
+      contractId: evil.contractId,
+      signedTx: "signed",
+    };
+
+    await expect(kit.confirmWalletCreation(created, evil.txHash)).rejects.toBeInstanceOf(
+      WalletOwnershipError
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// addSecp256r1 birth-metadata copy
+// ---------------------------------------------------------------------------
+
+describe("addSecp256r1 persistence", () => {
+  const NEW_KEY = base64url.encode(Buffer.alloc(16, 9));
+  const NEW_PUB = Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0xa9)]);
+
+  it("copies the connected wallet's verified birth metadata to the new signer", async () => {
+    const birth = makeBirth(0x21, WASM_HASH, 80);
+    const storage = new MemoryStorage();
+    await storage.save(storedPasskeyFrom(birth));
+    const kit = makeKit(storage);
+    kit.wallet = { options: { contractId: birth.contractId } } as never;
+    kit.keyId = KEY_ID_B64;
+
+    vi.spyOn(kit as never, "createBindingProof" as never).mockResolvedValue(
+      BINDING_PROOF as never
+    );
+    vi.spyOn(
+      (kit as unknown as { signerManager: { addSecp256r1: unknown } }).signerManager as never,
+      "addSecp256r1"
+    ).mockResolvedValue("AT_ADD" as never);
+
+    const tx = await kit.addSecp256r1(NEW_KEY, NEW_PUB, undefined as never, SignerStore.Persistent);
+    expect(tx).toBe("AT_ADD");
+
+    const stored = await storage.get(NEW_KEY);
+    expect(stored).toMatchObject({
+      contractId: birth.contractId,
+      publicKey: NEW_PUB,
+      birthWasmHash: birth.wasmHash,
+      creationTransactionHash: birth.txHash,
+      creationLedger: birth.ledger,
+    });
+  });
+
+  it("refuses to add when the connected wallet has no verified birth record", async () => {
+    const kit = makeKit(new MemoryStorage());
+    kit.wallet = { options: { contractId: "CC2R2H3DTXS7OCNV3FTNPAZYIRCY2L2OTBG5FZWJV63HXQ35WB2T2NWJ" } } as never;
+    kit.keyId = KEY_ID_B64; // no stored record for this keyId
+    vi.spyOn(kit as never, "createBindingProof" as never).mockResolvedValue(
+      BINDING_PROOF as never
+    );
+    vi.spyOn(
+      (kit as unknown as { signerManager: { addSecp256r1: unknown } }).signerManager as never,
+      "addSecp256r1"
+    ).mockResolvedValue("AT_ADD" as never);
+
+    await expect(
+      kit.addSecp256r1(NEW_KEY, NEW_PUB, undefined as never, SignerStore.Persistent)
+    ).rejects.toBeInstanceOf(WalletOwnershipError);
   });
 });

@@ -26,6 +26,7 @@ function makeDeps(overrides: Partial<SignerManagerDeps> = {}) {
     spec: realSpec(),
     options: { contractId: CONTRACT },
     add_signer: vi.fn(async () => "AT_ADD"),
+    add_secp256r1: vi.fn(async () => "AT_ADD_SECP256R1"),
     update_signer: vi.fn(async () => "AT_UPDATE"),
     remove_signer: vi.fn(async () => "AT_REMOVE"),
   };
@@ -68,9 +69,22 @@ describe("SignerManager signer writes", () => {
     const keyId = base64url.encode(Buffer.alloc(16, 1));
     const publicKey = base64url.encode(Buffer.alloc(65, 4));
 
-    await manager.addSecp256r1(keyId, publicKey, undefined, SignerStore.Temporary, 777);
+    const proof = {
+      authenticator_data: Buffer.alloc(37),
+      client_data_json: Buffer.from("{}"),
+      signature: Buffer.alloc(64),
+    };
+    await manager.addSecp256r1(
+      keyId,
+      publicKey,
+      undefined,
+      SignerStore.Temporary,
+      proof,
+      777
+    );
 
-    const [{ signer }] = wallet.add_signer.mock.calls[0]!;
+    const [{ signer, proof: sentProof }] = wallet.add_secp256r1.mock.calls[0]!;
+    expect(sentProof).toBe(proof);
     expect(signer.tag).toBe("Secp256r1");
     expect(signer.values[2]).toEqual([777n]); // SignerExpiration (Option<u64>)
     expect(signer.values[3]).toEqual([undefined]); // unlimited SignerLimits

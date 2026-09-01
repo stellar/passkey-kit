@@ -109,13 +109,13 @@ fn ed25519_with_policy_limits_full_stack() {
 
     let root_invocation = SorobanAuthorizedInvocation {
         function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
-            contract_address: example_contract_address.clone().try_into().unwrap(),
+            contract_address: example_contract_address.clone().into(),
             function_name: "call".try_into().unwrap(),
             args: std::vec![
-                sac_address.clone().try_into().unwrap(),
-                wallet_address.clone().try_into().unwrap(),
-                sac_address.clone().try_into().unwrap(),
-                amount.try_into().unwrap(),
+                sac_address.clone().into(),
+                wallet_address.clone().into(),
+                sac_address.clone().into(),
+                amount.into(),
             ]
             .try_into()
             .unwrap(),
@@ -133,7 +133,7 @@ fn ed25519_with_policy_limits_full_stack() {
 
     let root_auth = SorobanAuthorizationEntry {
         credentials: SorobanCredentials::Address(SorobanAddressCredentials {
-            address: wallet_address.clone().try_into().unwrap(),
+            address: wallet_address.clone().into(),
             nonce,
             signature_expiration_ledger,
             signature: Signatures(map![
@@ -258,14 +258,12 @@ fn secp256r1_passkey_full_stack() {
 
     let passkey = Passkey::new(21);
 
-    let (wallet_address, _) = register_wallet(
+    let (wallet_address, _) = register_passkey_wallet(
         &env,
-        &passkey.signer(
-            &env,
-            SignerExpiration(None),
-            SignerLimits(None),
-            SignerStorage::Persistent,
-        ),
+        &passkey,
+        SignerExpiration(None),
+        SignerLimits(None),
+        SignerStorage::Persistent,
     );
 
     let (sac_address, sac_admin_client, sac_client) = register_sac(&env);
@@ -285,7 +283,7 @@ fn secp256r1_passkey_full_stack() {
 
     let root_auth = SorobanAuthorizationEntry {
         credentials: SorobanCredentials::Address(SorobanAddressCredentials {
-            address: wallet_address.clone().try_into().unwrap(),
+            address: wallet_address.clone().into(),
             nonce,
             signature_expiration_ledger,
             signature: Signatures(map![

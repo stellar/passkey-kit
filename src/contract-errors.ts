@@ -9,7 +9,7 @@
  * `Errors` map; `contract-errors.test.ts` asserts this registry stays in sync
  * with it, so a bindings regen surfaces any drift.
  *
- * The v1 contract deliberately renumbered its error space to 100-129 so it is
+ * The v1 contract deliberately renumbered its error space to 100-139 so it is
  * disjoint from the legacy (pre-1.0) 1-9 range: a decoded code < 100 means the
  * client is talking to a legacy wallet. Both ranges are kept here so errors
  * from legacy deployed wallets still decode (family `SmartWalletLegacy`).
@@ -57,7 +57,7 @@ export const CONTRACT_ERROR_REGISTRY: Readonly<
   Record<number, ContractErrorInfo>
 > = Object.freeze(
   Object.fromEntries([
-    // --- v1 SmartWallet (100-129) — source of truth in the bindings Errors map ---
+    // --- v1 SmartWallet (100-139) — source of truth in the bindings Errors map ---
     // 100-109: signer storage / management
     entry(100, "SignerNotFound", "SmartWallet", "The requested signer does not exist on this smart wallet."),
     entry(101, "SignerAlreadyExists", "SmartWallet", "add_signer was called with a signer key that already exists."),
@@ -75,6 +75,10 @@ export const CONTRACT_ERROR_REGISTRY: Readonly<
     entry(124, "InvalidAuthenticatorData", "SmartWallet", "authenticatorData is shorter than the WebAuthn minimum of 37 bytes."),
     entry(125, "UserPresenceRequired", "SmartWallet", "The authenticator did not set the User Present (UP) flag."),
     entry(126, "AuthenticatorDataTooLarge", "SmartWallet", "authenticatorData exceeds the 1024-byte cap."),
+    // 130-139: Secp256r1 signer binding
+    entry(130, "BindingProofRequired", "SmartWallet", "A Secp256r1 signer requires a purpose-specific WebAuthn proof over its full signer value."),
+    entry(131, "BindingProofUnexpected", "SmartWallet", "A non-Secp256r1 signer cannot include a binding proof."),
+    entry(133, "BindingPublicKeyImmutable", "SmartWallet", "update_signer cannot replace a bound Secp256r1 public key."),
 
     // --- Legacy (pre-1.0) 1-9 — kept so errors from legacy deployed wallets decode ---
     entry(1, "NotFound", "SmartWalletLegacy", "[legacy] The specified signer was not found."),

@@ -25,9 +25,9 @@ All other operations, contracts, functions, auth trees, sources, WASM hashes,
 and over-ceiling fees are rejected before an API key can be minted. Invalid
 JSON and missing `CF-Connecting-IP` also fail before key custody is touched.
 
-The deployed testnet Worker accepts only the fixed `binver = 1.0.1` hash.
-It rejects the vulnerable `binver = 1.0.0` hash for every function.
-This restriction also prevents the Worker from sponsoring an old-wallet upgrade.
+The deployed testnet Worker accepts only the `binver = 1.1.0` provenance hash.
+It rejects every earlier hash for all functions.
+This restriction prevents sponsored use of unsupported pre-release wallets.
 
 A fixed-window Durable Object limiter is applied globally and per IP. The
 global bucket bounds IP rotation. Browser CORS is an exact configured origin

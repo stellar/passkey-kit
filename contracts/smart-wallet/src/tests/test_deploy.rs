@@ -70,7 +70,7 @@ fn wallet_deploys_contract() {
 
     let root_auth = SorobanAuthorizationEntry {
         credentials: SorobanCredentials::Address(SorobanAddressCredentials {
-            address: wallet_address.clone().try_into().unwrap(),
+            address: wallet_address.clone().into(),
             nonce,
             signature_expiration_ledger,
             signature: Signatures(map![

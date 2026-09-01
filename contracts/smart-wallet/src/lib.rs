@@ -1,5 +1,9 @@
 #![no_std]
 
+use binding::{
+    get_binding_record, move_binding_record, record_key_material, remove_binding_record,
+    store_binding_record, verify_binding_proof,
+};
 use context::verify_context;
 use signer::{
     get_signer_val_storage, is_durable, is_durable_admin, is_signer_expired, process_signer,
@@ -7,19 +11,23 @@ use signer::{
 };
 use smart_wallet_interface::{
     events::{SignerAdded, SignerRemoved, SignerUpdated, Upgraded},
-    types::{Error, Signature, Signatures, Signer, SignerKey, SignerStorage, SignerVal},
+    types::{
+        BindingPurpose, Error, Secp256r1BindingRecord, Secp256r1Signature, Signature, Signatures,
+        Signer, SignerKey, SignerStorage, SignerVal,
+    },
     PolicyClient, SmartWalletInterface,
 };
 use soroban_sdk::{
     auth::{Context, CustomAccountInterface},
     contract, contractimpl, contractmeta,
     crypto::Hash,
-    panic_with_error, symbol_short, BytesN, Env, Symbol, Vec,
+    panic_with_error, symbol_short, Bytes, BytesN, Env, Symbol, Vec,
 };
 use storage::extend_instance;
 use verify::verify_secp256r1_signature;
 
 mod base64_url;
+mod binding;
 mod context;
 mod signer;
 mod storage;
@@ -139,14 +147,77 @@ impl Contract {
 
         Ok(())
     }
+
+    /// The Secp256r1 fields a binding commits to, if `signer` is a passkey.
+    fn secp256r1_binding_parts(signer: &Signer) -> Option<(Bytes, BytesN<65>, SignerStorage)> {
+        match signer {
+            Signer::Secp256r1(key_id, public_key, _, _, signer_storage) => {
+                Some((key_id.clone(), public_key.clone(), signer_storage.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Add a signer under the binding protocol: a Secp256r1 signer MUST
+    /// carry a proof (verified, then stored with the signer); any other
+    /// signer MUST NOT.
+    fn add_signer_with_proof(
+        env: &Env,
+        signer: Signer,
+        proof: Option<Secp256r1Signature>,
+        purpose: BindingPurpose,
+    ) -> Result<(), Error> {
+        match (Self::secp256r1_binding_parts(&signer), proof) {
+            (Some((key_id, _, signer_storage)), Some(proof)) => {
+                // Cheap duplicate check before the expensive proof
+                // verification (`store_signer` re-checks; this only saves the
+                // budget of verifying a proof for a doomed add).
+                if get_signer_val_storage(env, &SignerKey::Secp256r1(key_id.clone()), false)
+                    .is_some()
+                {
+                    return Err(Error::SignerAlreadyExists);
+                }
+
+                // The challenge commits to `purpose` and to every field of
+                // `signer`, so a proof minted for the other entry point or for
+                // any other signer shape fails here.
+                verify_binding_proof(env, &purpose, &signer, proof.clone())?;
+
+                // The record keeps the ORIGINAL signer, which is what the
+                // holder actually signed. `update_signer` may reshape the live
+                // entry later; the attestation must not drift with it.
+                let record = Secp256r1BindingRecord {
+                    signer: signer.clone(),
+                    purpose,
+                    proof,
+                };
+
+                Self::add_signer_impl(env, signer)?;
+
+                store_binding_record(env, &key_id, &record, &signer_storage);
+
+                Ok(())
+            }
+            (Some(_), None) => Err(Error::BindingProofRequired),
+            (None, Some(_)) => Err(Error::BindingProofUnexpected),
+            (None, None) => Self::add_signer_impl(env, signer),
+        }
+    }
 }
 
 #[contractimpl]
 impl SmartWalletInterface for Contract {
-    fn __constructor(env: Env, signer: Signer) {
+    fn __constructor(env: Env, signer: Signer, proof: Option<Secp256r1Signature>) {
         // Deploy-time-only initialization (CAP-0058 constructor). There is no
-        // init flag and no un-authenticated first-add path.
-        if let Err(error) = Self::add_signer_impl(&env, signer) {
+        // init flag and no un-authenticated first-add path. A passkey first
+        // signer must prove it consented to THIS address on THIS network for
+        // the GENESIS purpose and for this exact signer value.
+        //
+        // Every panic below unwinds the whole `CreateContractV2`, so a
+        // rejected constructor leaves no instance and no storage behind.
+        if let Err(error) =
+            Self::add_signer_with_proof(&env, signer, proof, BindingPurpose::Genesis)
+        {
             panic_with_error!(env, error);
         }
 
@@ -157,16 +228,58 @@ impl SmartWalletInterface for Contract {
         if Self::durable_count(&env) == 0 {
             panic_with_error!(env, Error::LastSigner);
         }
+
+        // Durability alone is not viability. A durable signer with no
+        // independent admin authority — `SignerLimits(Some(empty))`, or a
+        // wallet-self grant that needs a co-signer nobody holds — yields a
+        // wallet that can never authorize `add_signer` or `upgrade` again.
+        // That state is unrecoverable and can still receive funds, so the
+        // first signer must ALSO be a durable admin.
+        //
+        // A durable admin is by definition durable, so this subsumes the
+        // check above; the `LastSigner` guard is kept as an independent
+        // backstop against a mis-classification in `is_durable_admin`.
+        if Self::admin_count(&env) == 0 {
+            panic_with_error!(env, Error::LastAdminSigner);
+        }
     }
 
     fn add_signer(env: Env, signer: Signer) -> Result<(), Error> {
         env.current_contract_address().require_auth();
 
+        // Passkeys enter only with a binding proof. Reject here rather than
+        // silently storing an unbound Secp256r1 signer.
+        if matches!(signer, Signer::Secp256r1(..)) {
+            return Err(Error::BindingProofRequired);
+        }
+
         Self::add_signer_impl(&env, signer)
+    }
+
+    fn add_secp256r1(env: Env, signer: Signer, proof: Secp256r1Signature) -> Result<(), Error> {
+        env.current_contract_address().require_auth();
+
+        if !matches!(signer, Signer::Secp256r1(..)) {
+            return Err(Error::BindingProofUnexpected);
+        }
+
+        Self::add_signer_with_proof(&env, signer, Some(proof), BindingPurpose::Add)
     }
 
     fn update_signer(env: Env, signer: Signer) -> Result<(), Error> {
         env.current_contract_address().require_auth();
+
+        // A Secp256r1 public key is immutable: the binding proof commits to
+        // it. Checked BEFORE any write so a rejected update leaves no trace.
+        if let Signer::Secp256r1(key_id, public_key, _, _, _) = &signer {
+            if let Some((SignerVal::Secp256r1(stored_public_key, _, _), _)) =
+                get_signer_val_storage(&env, &SignerKey::Secp256r1(key_id.clone()), false)
+            {
+                if stored_public_key != *public_key {
+                    return Err(Error::BindingPublicKeyImmutable);
+                }
+            }
+        }
 
         let (signer_key, signer_val, signer_storage) = process_signer(signer);
 
@@ -203,6 +316,11 @@ impl SmartWalletInterface for Contract {
             Self::set_durable_count(&env, count - 1);
         } else if !was_durable && now_durable {
             Self::set_durable_count(&env, Self::durable_count(&env) + 1);
+        }
+
+        // The binding record lives in its signer's durability: follow a flip.
+        if let SignerKey::Secp256r1(key_id) = &signer_key {
+            move_binding_record(&env, key_id, &old_storage, &signer_storage);
         }
 
         extend_instance(&env);
@@ -264,6 +382,12 @@ impl SmartWalletInterface for Contract {
             }
         }
 
+        // A passkey's binding leaves with it; re-adding the key needs a
+        // fresh proof through `add_secp256r1`.
+        if let SignerKey::Secp256r1(key_id) = &signer_key {
+            remove_binding_record(&env, key_id, &signer_storage);
+        }
+
         // Removal is pure wallet state — NO policy code runs on this
         // path. Calling the policy's `uninstall` here
         // would let a rejecting/broken policy block its own removal: `try_*`
@@ -312,6 +436,31 @@ impl SmartWalletInterface for Contract {
 
     fn get_signer(env: Env, signer_key: SignerKey) -> Option<SignerVal> {
         get_signer_val_storage(&env, &signer_key, false).map(|(signer_val, _)| signer_val)
+    }
+
+    fn get_secp256r1_binding(env: Env, key_id: Bytes) -> Option<Secp256r1BindingRecord> {
+        let (record, _) = get_binding_record(&env, &key_id)?;
+
+        // Equality invariant: a record is meaningful only for the signer it
+        // names. Under this code the two agree by construction; a record
+        // written by other code that disagrees is filtered, not trusted.
+        //
+        // Only the IMMUTABLE key material is compared. `update_signer` may
+        // legitimately reshape expiration, limits, and storage, and the record
+        // deliberately keeps the original value it attests to, so comparing
+        // the whole signer would drop a valid record after any policy edit.
+        let (record_key_id, record_public_key) = record_key_material(&record)?;
+        let (signer_val, _) =
+            get_signer_val_storage(&env, &SignerKey::Secp256r1(key_id.clone()), false)?;
+
+        match signer_val {
+            SignerVal::Secp256r1(public_key, _, _)
+                if record_key_id == key_id && record_public_key == public_key =>
+            {
+                Some(record)
+            }
+            _ => None,
+        }
     }
 }
 

@@ -138,12 +138,20 @@ export async function boot(): Promise<void> {
 
 export async function register(name: string): Promise<void> {
   await run("Create wallet", async () => {
-    const { keyIdBase64, contractId, signedTx, keyId } = await account.createWallet(
+    const created = await account.createWallet(
       "Passkey Kit Demo",
       name,
     );
-    const ok = reportResult("Deploy wallet", await submit(signedTx));
-    if (!ok) throw new Error("Wallet deploy was not accepted by the relayer");
+    const deploy = await submit(created.signedTx);
+    if (!reportResult("Deploy wallet", deploy) || !deploy.success) {
+      throw new Error("Wallet deploy was not accepted by the relayer");
+    }
+
+    // Do not connect or move funds until RPC proves the immutable wallet birth.
+    await account.confirmWalletCreation(created, deploy.hash);
+    const { keyIdBase64, contractId } = await account.connectWallet({
+      keyId: created.keyIdBase64,
+    });
 
     setConnected(keyIdBase64, contractId);
     // The constructor signer is unlimited (admin).
@@ -157,7 +165,7 @@ export async function register(name: string): Promise<void> {
       label: name,
       publicKey: passkey ? base64url(Buffer.from(passkey.publicKey)) : undefined,
     });
-    pushLog("success", `Wallet created`, { detail: `keyId ${keyIdBase64.slice(0, 10)}… · ${bytesLabel(keyId)}` });
+    pushLog("success", `Wallet created`, { detail: `keyId ${keyIdBase64.slice(0, 10)}… · ${bytesLabel(created.keyId)}` });
     await refreshKnown();
 
     await refreshBalance();
@@ -178,11 +186,10 @@ export async function connect(keyId?: string): Promise<void> {
     app.status = "connecting";
     const { keyIdBase64, contractId } = await account.connectWallet({
       keyId,
-      getContractId: async (kid) => {
-        const ids = await indexer
-          ?.findWallets(SignerKey.Secp256r1(kid))
-          .catch(() => [] as string[]);
-        return ids?.[0];
+      getWalletCandidates: async (kid) => {
+        return indexer
+          ? indexer.findWallets(SignerKey.Secp256r1(kid))
+          : { complete: false, candidates: [] };
       },
     });
 
@@ -254,17 +261,14 @@ export async function addPasskeySigner(name: string, input: AddSignerInput): Pro
       input.store,
       input.expiration,
     );
-    if (!(await signAndSubmit("Add passkey signer", at))) return;
+    if (!(await signAndSubmit("Add passkey signer", at))) {
+      await storage.delete(created.keyId).catch(() => {});
+      return;
+    }
 
-    // Persist so it is reconnectable + has a retrievable public key.
+    // `addSecp256r1` copied the verified wallet-birth record before submission.
     await storage
-      .save({
-        keyId: created.keyId,
-        publicKey: created.publicKey,
-        contractId: app.contractId!,
-        nickname: name,
-        createdAt: Date.now(),
-      })
+      .update(created.keyId, { nickname: name })
       .catch(() => {});
     upsertSigner({
       kind: "Secp256r1",
@@ -526,13 +530,19 @@ export async function reverseLookup(): Promise<void> {
     return;
   }
   await run("Reverse lookup keyId", async () => {
-    const ids = await idx.findWallets(SignerKey.Secp256r1(app.keyId!));
+    const lookup = await idx.findWallets(SignerKey.Secp256r1(app.keyId!));
+    const ids = lookup.candidates.map(({ contractId }) => contractId);
     const match = ids.includes(app.contractId ?? "");
-    pushLog(match ? "success" : "info", `keyId → ${ids.length} wallet(s) via Mercury`, {
-      detail: ids.length
-        ? `${ids.map((i) => i.slice(0, 8) + "…").join(", ")}${match ? " · matches connected ✓" : ""}`
-        : "none",
-    });
+    const status = lookup.complete ? "complete" : "incomplete";
+    pushLog(
+      match && lookup.complete ? "success" : "info",
+      `keyId → ${ids.length} wallet(s) via Mercury`,
+      {
+        detail: ids.length
+          ? `${ids.map((id) => id.slice(0, 8) + "…").join(", ")} · ${status}${match ? " · matches connected ✓" : ""}`
+          : `none · ${status}`,
+      }
+    );
   });
 }
 

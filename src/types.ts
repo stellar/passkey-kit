@@ -82,11 +82,14 @@ export interface StoredPasskey {
   /** Smart-wallet contract address this passkey controls. */
   contractId: string;
 
-  /**
-   * Whether this passkey predicted the wallet's deterministic deployment.
-   * An omitted legacy value is not trusted as a secondary association.
-   */
-  isPrimary?: boolean;
+  /** Immutable WASM hash from the verified CreateContractV2 operation. */
+  birthWasmHash: string;
+
+  /** Hash of the successful transaction that created `contractId`. */
+  creationTransactionHash: string;
+
+  /** Ledger that contains `creationTransactionHash`. */
+  creationLedger: number;
 
   /** User-friendly label for this passkey. */
   nickname?: string;
@@ -144,6 +147,9 @@ export interface CreateWalletResult {
 
   /** Base64URL-encoded credential id. */
   keyIdBase64: string;
+
+  /** 65-byte SEC-1 uncompressed P-256 public key. */
+  publicKey: Uint8Array;
 
   /** Predicted smart-wallet contract address. */
   contractId: string;

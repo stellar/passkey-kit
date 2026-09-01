@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Map, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Map, Symbol, Vec};
 
 /// Contract errors.
 ///
@@ -10,6 +10,7 @@ use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Map, Vec}
 /// - 100-109: signer storage / management
 /// - 110-119: auth (`__check_auth`)
 /// - 120-129: WebAuthn (secp256r1) verification
+/// - 130-139: Secp256r1 signer binding
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -87,6 +88,20 @@ pub enum Error {
     /// rejects oversized input BEFORE it is hashed, since this path is
     /// reachable without a valid signature.
     AuthenticatorDataTooLarge = 126,
+
+    /// A Secp256r1 signer was supplied without its binding proof. Passkeys
+    /// enter a wallet only through `__constructor` (GENESIS proof) or
+    /// `add_secp256r1` (ADD proof) — never through the generic `add_signer`.
+    BindingProofRequired = 130,
+    /// A binding proof was supplied for a signer that is not Secp256r1.
+    BindingProofUnexpected = 131,
+    /// `update_signer` may not change a Secp256r1 signer's public key: the
+    /// binding proof commits to it. Remove the signer and re-add it with a
+    /// fresh proof through `add_secp256r1` instead.
+    ///
+    /// Code 132 is retired with `bind_secp256r1`; 134 with its
+    /// already-bound guard. Neither is reused.
+    BindingPublicKeyImmutable = 133,
 }
 
 /// Optional expiration for a signer as a UNIX timestamp in seconds, INCLUSIVE:
@@ -194,3 +209,80 @@ pub enum Signature {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Signatures(pub Map<SignerKey, Signature>);
+
+/// Storage keys for wallet entries that are NOT signer entries. Every variant
+/// name here must stay distinct from every `SignerKey` variant name: a
+/// `#[contracttype]` enum encodes as `[Symbol(variant), fields…]` with no
+/// type name, so a shared variant name would collide in contract storage.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BindingKey {
+    /// A `Secp256r1BindingRecord`, keyed by the signer's credential id and
+    /// stored in the same durability as the signer entry.
+    Secp256r1Binding(Bytes),
+}
+
+/// What a binding proof authorizes. Carried in the challenge preimage AND
+/// reflected in the domain separator, so the two proof spaces are disjoint
+/// twice over: a GENESIS proof can never be replayed into `add_secp256r1`,
+/// and an ADD proof can never seed a constructor.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BindingPurpose {
+    /// The wallet's first signer, supplied to `__constructor`.
+    Genesis,
+    /// A later signer, supplied to `add_secp256r1`.
+    Add,
+}
+
+/// The preimage of a Secp256r1 binding challenge. The challenge is
+/// `sha256(XDR(payload))` — see `binding::secp256r1_binding_challenge`.
+///
+/// The proof commits to the FULL original `Signer`, not just its key
+/// material. A holder consents to one exact signer value on one wallet on one
+/// network for one purpose, so a stolen pending proof cannot be re-aimed at a
+/// different shape — in particular it cannot be used to seat the holder's
+/// passkey with limits that leave the wallet with no admin.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Secp256r1BindingPayload {
+    /// `binding::SECP256R1_GENESIS_DOMAIN` or `binding::SECP256R1_ADD_DOMAIN`.
+    pub domain: Symbol,
+    /// `env.ledger().network_id()` of the network the wallet lives on.
+    pub network_id: BytesN<32>,
+    /// The wallet address (`env.current_contract_address()` when checked).
+    pub contract: Address,
+    /// Which entry point the proof authorizes.
+    pub purpose: BindingPurpose,
+    /// The complete signer value the holder consented to, including
+    /// expiration, limits, and storage durability.
+    pub signer: Signer,
+}
+
+/// A passkey's binding to this wallet: the exact signer it consented to, the
+/// purpose that consent was given for, and the WebAuthn assertion it produced
+/// over the corresponding challenge.
+///
+/// Stored under `BindingKey::Secp256r1Binding(key_id)` in the signer's
+/// durability; written only by `__constructor` and `add_secp256r1`, each of
+/// which verifies `proof` first.
+///
+/// `signer` is the ORIGINAL value and is never rewritten: `update_signer` may
+/// reshape the live signer's mutable policy fields, and the record continues
+/// to attest what was actually signed. Its key id and public key must still
+/// equal the live signer's — `get_secp256r1_binding` enforces that on read.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Secp256r1BindingRecord {
+    pub signer: Signer,
+    pub purpose: BindingPurpose,
+    pub proof: Secp256r1Signature,
+}
+
+/// The credential id and public key inside a `Secp256r1` signer.
+pub fn secp256r1_key_material(signer: &Signer) -> Option<(Bytes, BytesN<65>)> {
+    match signer {
+        Signer::Secp256r1(key_id, public_key, ..) => Some((key_id.clone(), public_key.clone())),
+        _ => None,
+    }
+}

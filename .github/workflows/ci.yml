@@ -11,6 +11,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  contracts:
+    name: contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.0
+          targets: wasm32v1-none
+          components: clippy, rustfmt
+
+      - name: Check contract formatting
+        working-directory: contracts
+        run: cargo fmt --all -- --check
+
+      - name: Lint contracts and tests
+        working-directory: contracts
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Run contract tests
+        working-directory: contracts
+        run: cargo test --workspace --locked
+
   build:
     name: test & build
     runs-on: ubuntu-latest

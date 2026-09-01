@@ -47,17 +47,13 @@ import {
 // ============================================================================
 
 /**
- * Derive a smart-wallet contract address from a passkey credential id.
+ * Derive a legacy account-deployer wallet address from a credential id.
  *
- * The wallet's contract id is deterministic: `salt = sha256(keyId)` and the
- * deployer address salts a `ContractIdPreimageFromAddress`. This determinism is
- * load-bearing — the indexer reverse-lookup (keyId → wallet) re-derives the
- * address the same way — so this function is pinned with golden vectors in
- * `utils.test.ts`. Any change to the derivation breaks the tests instead of
- * silently shifting deployed addresses.
+ * The legacy contract id uses `salt = sha256(keyId)`. The deployer address
+ * selects the namespace. Golden vectors prevent an accidental address change.
  *
  * @param keyId - The raw credential id bytes
- * @param deployerPublicKey - The deployer's `G…` public key
+ * @param deployerPublicKey - The deployer's `G…` or `C…` address
  * @param networkPassphrase - The network passphrase
  * @returns The derived contract address (`C…`)
  */

@@ -1,0 +1,21 @@
+[package]
+name = "constructor-integration"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish = false
+build = "build.rs"
+
+[lib]
+doctest = false
+
+[dependencies]
+
+[dev-dependencies]
+base64 = { workspace = true }
+p256 = { workspace = true }
+sha2 = { workspace = true }
+smart-wallet = { workspace = true, features = ["testutils"] }
+smart-wallet-interface = { workspace = true }
+soroban-sdk = { workspace = true, features = ["testutils"] }

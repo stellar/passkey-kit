@@ -78,6 +78,7 @@ export const SIMULATION_SOURCE =
 /** Smart-wallet entrypoints the proxy may sponsor by default. */
 export const DEFAULT_WALLET_FUNCTIONS = [
   "add_signer",
+  "add_secp256r1",
   "update_signer",
   "remove_signer",
   "upgrade",

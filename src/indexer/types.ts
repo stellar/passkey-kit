@@ -51,6 +51,48 @@ export interface IndexerHealth {
 }
 
 /**
+ * One reverse-lookup wallet, including birth metadata when the indexer
+ * actually supplied it. Missing birth fields stay absent; callers must not
+ * treat a live signer as proof of birth.
+ */
+export interface WalletCandidate {
+  /** Wallet contract id (`C…`). */
+  contractId: string;
+  /** WASM hash from the creating transaction, lowercase hex. */
+  birthWasmHash: string;
+  /** Creating transaction hash, lowercase hex. */
+  creationTransactionHash: string;
+  /** Ledger that created the contract. */
+  creationLedger: number;
+}
+
+/** An incomplete row retained only for diagnostics. It is never connectable. */
+export type IncompleteWalletCandidate = Partial<WalletCandidate> & {
+  contractId: string;
+};
+
+/**
+ * Reverse-lookup result. `complete` is true only when the indexer claimed a
+ * finished scan and every candidate carries complete birth claims. A 404,
+ * an old payload, or a missing field is `complete: false`.
+ */
+export type WalletCandidateLookup =
+  | {
+      schema: 2;
+      complete: true;
+      indexedThroughLedger: number;
+      /** Live-signer-confirmed candidates with complete birth metadata. */
+      candidates: WalletCandidate[];
+    }
+  | {
+      schema?: number;
+      complete: false;
+      indexedThroughLedger?: number;
+      /** Diagnostic rows only. Callers must reject the full response. */
+      candidates: IncompleteWalletCandidate[];
+    };
+
+/**
  * A pluggable signer indexer.
  *
  * Null-tolerant seam (per SAK): a backend that is *not configured* is
@@ -61,16 +103,15 @@ export interface IndexerHealth {
 export interface SignerIndexer {
   /** Enumerate all signers currently indexed for a wallet. */
   getSigners(wallet: string): Promise<WalletSigner[]>;
-  /** Reverse lookup: the wallet contract ids a signer key belongs to. */
-  findWallets(key: SignerKey): Promise<string[]>;
+  /** Reverse lookup: wallets a signer key belongs to, with birth metadata. */
+  findWallets(key: SignerKey): Promise<WalletCandidateLookup>;
   /** Probe backend health (degrades to `{ ok: false }` rather than throwing). */
   health(): Promise<IndexerHealth>;
 }
 
 /**
- * Deps for the SDK-side `findWallets` hardening (#598 F3): before trusting a
- * reverse-lookup result, the candidate wallet is confirmed by re-deriving its
- * address from the keyId (deterministic derivation) — no unverified `res[0]`.
+ * @deprecated Retained for source compatibility. Derivation does not confirm
+ * wallet ownership, so Mercury ignores these values and requires RPC.
  */
 export interface FindWalletsHardeningDeps {
   networkPassphrase: string;
