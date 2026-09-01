@@ -113,6 +113,8 @@ Use a **fresh** OTP for each publish (codes expire in ~30s). npm package version
 Publishing the npm packages does **not** deploy contracts, the indexer, or the workers. Those are separate, gated steps:
 
 - **Contract WASM** and its canonical hash: [`deployments-2026-09-01.md`](./deployments-2026-09-01.md). Every user wallet deploys its own instance. The smart-wallet WASM is not a singleton.
-- **Mercury passkey-indexer** — hosted and **keyless**; nothing to deploy. The SDK queries `https://{testnet,mainnet}.mercurydata.app/rest/passkey-indexer`. Mercury indexed the new testnet smoke wallet.
+- **Mercury passkey-indexer** — hosted and **keyless**. The indexer team must deploy the schema-2 candidate response.
+  The SDK fails closed for fresh-device discovery until that response is available.
+  See [`indexer-signer-provenance-response.md`](./indexer-signer-provenance-response.md).
 - **Relayer-proxy worker** (Cloudflare): [`relayer-proxy/README.md`](../relayer-proxy/README.md) (`pnpm deploy` / `pnpm deploy:production`).
 - **Demo** (Cloudflare Pages): root `wrangler.toml`, `pnpm run deploy:demo` / `deploy:demo:prod`.
