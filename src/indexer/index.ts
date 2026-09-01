@@ -13,6 +13,9 @@
 export type {
   SignerIndexer,
   WalletSigner,
+  WalletCandidate,
+  IncompleteWalletCandidate,
+  WalletCandidateLookup,
   IndexerHealth,
   SignerStatus,
   SignerStorageClass,

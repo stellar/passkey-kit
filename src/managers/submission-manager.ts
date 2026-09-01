@@ -13,6 +13,7 @@ import type { Keypair, Transaction } from "@stellar/stellar-sdk";
 import type { AssembledTransaction } from "@stellar/stellar-sdk/contract";
 import type { Server } from "@stellar/stellar-sdk/rpc";
 import type { Client as PasskeyClient } from "passkey-kit-sdk";
+import type { Secp256r1Signature } from "passkey-kit-sdk";
 import {
   buildDeployTransaction as buildDeployTransactionOp,
   deriveWalletAddress as deriveWalletAddressOp,
@@ -69,7 +70,8 @@ export class SubmissionManager {
   /** Build the wallet deploy transaction (initial Secp256r1 signer). */
   buildDeployTransaction(
     keyId: Buffer,
-    publicKey: Uint8Array
+    publicKey: Uint8Array,
+    proof: Secp256r1Signature
   ): Promise<AssembledTransaction<PasskeyClient>> {
     return buildDeployTransactionOp(
       {
@@ -81,7 +83,8 @@ export class SubmissionManager {
         timeoutInSeconds: this.deps.timeoutInSeconds,
       },
       keyId,
-      publicKey
+      publicKey,
+      proof
     );
   }
 

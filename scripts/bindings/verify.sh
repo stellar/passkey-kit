@@ -10,7 +10,7 @@
 # Usage: bash scripts/bindings/verify.sh
 set -euo pipefail
 
-CANONICAL_HASH="502ea4e7bdb3ea99880941f1d35ceb67fb598692c0bb40f842ef9c9f17d58b58"
+CANONICAL_HASH="97ce047884106b1c6c3bb40b8973cc48db1c4dad95c9e20462bf2c701daa764e"
 NETWORK="testnet"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

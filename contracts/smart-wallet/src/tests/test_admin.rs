@@ -7,8 +7,8 @@ extern crate std;
 use smart_wallet_interface::{
     events::{SignerAdded, SignerRemoved, SignerUpdated, Upgraded},
     types::{
-        Error, Signatures, Signer, SignerExpiration, SignerKey, SignerLimits, SignerStorage,
-        SignerVal,
+        Error, Secp256r1Signature, Signatures, Signer, SignerExpiration, SignerKey, SignerLimits,
+        SignerStorage, SignerVal,
     },
     PolicyInterface, SmartWalletClient,
 };
@@ -16,7 +16,7 @@ use soroban_sdk::{
     auth::Context,
     contract, contractimpl, contracttype, map,
     testutils::{Address as _, Events as _, Ledger as _},
-    vec, Address, Bytes, Env, Event as _, IntoVal, Vec,
+    vec, Address, Bytes, Env, Event as _, Vec,
 };
 
 use crate::tests::test_common::*;
@@ -229,12 +229,15 @@ fn add_signer_emits_event() {
         ),
     );
 
-    client.mock_all_auths().add_signer(&passkey.signer(
+    let signer = passkey.signer(
         &env,
         SignerExpiration(Some(123_456)),
         SignerLimits(None),
         SignerStorage::Temporary,
-    ));
+    );
+    client
+        .mock_all_auths()
+        .add_secp256r1(&signer, &passkey.add_proof(&env, &wallet, &signer));
 
     let expected = SignerAdded {
         key: passkey.signer_key(&env),
@@ -935,11 +938,16 @@ fn temporary_or_expiring_unlimited_signers_are_not_durable_admins() {
 /// distinct error code (`LastSigner`, not `LastAdminSigner`) also proves the
 /// admin counter did NOT over-count this shape.
 #[test]
-fn sole_limited_signer_cannot_zero_out() {
+#[should_panic(expected = "Error(Contract, #103)")]
+fn constructor_rejects_a_sole_limited_signer() {
     let env = test_env();
     let a = Ed25519Signer::new(1);
 
-    let (_, client) = register_wallet(
+    // A wallet whose only signer has an empty limits map could never
+    // authorize `add_signer` or `upgrade` again. `__constructor` now refuses
+    // to create that state, so the old "sole limited signer cannot zero out"
+    // scenario is unreachable rather than merely guarded.
+    register_wallet(
         &env,
         &a.signer(
             &env,
@@ -948,20 +956,8 @@ fn sole_limited_signer_cannot_zero_out() {
             SignerStorage::Persistent,
         ),
     );
-
-    assert_eq!(
-        client
-            .mock_all_auths()
-            .try_remove_signer(&a.signer_key(&env)),
-        Err(Ok(Error::LastSigner))
-    );
-    assert!(client.get_signer(&a.signer_key(&env)).is_some());
 }
 
-/// Full-stack regression: a sole admin can AUTHORIZE its own removal
-/// (the pass-1 self-removal rule and pass-2 both succeed), but execution of
-/// `remove_signer` still rejects — the guard holds at execution time, not
-/// only in the auth layer.
 #[test]
 fn last_admin_self_removal_fails_at_execution() {
     let env = test_env();
@@ -978,7 +974,7 @@ fn last_admin_self_removal_fails_at_execution() {
     let root_auth = soroban_sdk::xdr::SorobanAuthorizationEntry {
         credentials: soroban_sdk::xdr::SorobanCredentials::Address(
             soroban_sdk::xdr::SorobanAddressCredentials {
-                address: wallet.clone().try_into().unwrap(),
+                address: wallet.clone().into(),
                 nonce,
                 signature_expiration_ledger,
                 signature: Signatures(soroban_sdk::map![
@@ -1010,7 +1006,11 @@ fn last_admin_self_removal_fails_at_execution() {
 /// Register a wallet at a PRE-GENERATED address so the constructor signer's
 /// limits can reference the wallet itself.
 fn register_wallet_at<'a>(env: &Env, wallet: &Address, signer: &Signer) -> ContractClient<'a> {
-    env.register_at(wallet, Contract, (signer.clone(),));
+    env.register_at(
+        wallet,
+        Contract,
+        (signer.clone(), None::<Secp256r1Signature>),
+    );
     ContractClient::new(env, wallet)
 }
 
@@ -1088,17 +1088,18 @@ fn wallet_self_empty_cosigner_list_counts_as_admin() {
 /// entry has no admin surface at all — neither is counted, both stay
 /// removable (self-removal exit right preserved).
 #[test]
-fn cosigner_gated_and_foreign_limited_signers_not_counted() {
-    // {wallet_self: Some([b])} — admin surface only WITH b's approval. As the
-    // sole signer, removal is blocked by the TOTAL-count backstop; the error
-    // being `LastSigner` (not `LastAdminSigner`) proves the admin counter did
-    // not over-count the shape.
+#[should_panic(expected = "Error(Contract, #103)")]
+fn constructor_rejects_a_cosigner_gated_sole_signer() {
     let env = test_env();
     let a = Ed25519Signer::new(1);
     let b = Ed25519Signer::new(2);
     let wallet = Address::generate(&env);
 
-    let client = register_wallet_at(
+    // `{wallet_self: Some([b])}` reaches the admin surface only WITH b's
+    // approval, so it is not independently admin-capable. As a sole signer it
+    // would leave the wallet unable to authorize anything alone; the
+    // constructor refuses it.
+    register_wallet_at(
         &env,
         &wallet,
         &a.signer(
@@ -1111,55 +1112,8 @@ fn cosigner_gated_and_foreign_limited_signers_not_counted() {
             SignerStorage::Persistent,
         ),
     );
-    assert_eq!(
-        client
-            .mock_all_auths()
-            .try_remove_signer(&a.signer_key(&env)),
-        Err(Ok(Error::LastSigner))
-    );
-
-    // With a second signer present it is freely removable (no admin guard).
-    let (_, b_signer) = admin_signer(&env, 2);
-    client.mock_all_auths().add_signer(&b_signer);
-    assert_eq!(
-        client
-            .mock_all_auths()
-            .try_remove_signer(&a.signer_key(&env)),
-        Ok(Ok(()))
-    );
-
-    // {foreign: None} — no wallet-self entry, no admin surface: same shape of
-    // proof.
-    let env = test_env();
-    let foreign = Address::generate(&env);
-    let (_, client) = register_wallet(
-        &env,
-        &a.signer(
-            &env,
-            SignerExpiration(None),
-            SignerLimits(Some(map![&env, (foreign, None)])),
-            SignerStorage::Persistent,
-        ),
-    );
-    assert_eq!(
-        client
-            .mock_all_auths()
-            .try_remove_signer(&a.signer_key(&env)),
-        Err(Ok(Error::LastSigner))
-    );
-
-    let (_, b_signer) = admin_signer(&env, 2);
-    client.mock_all_auths().add_signer(&b_signer);
-    assert_eq!(
-        client
-            .mock_all_auths()
-            .try_remove_signer(&a.signer_key(&env)),
-        Ok(Ok(()))
-    );
 }
 
-/// (d) Two admin-capable-limited signers: one removable, the survivor
-/// protected — the counter treats them exactly like unlimited admins.
 #[test]
 fn two_admin_capable_limited_signers_accounting() {
     let env = test_env();
@@ -1214,13 +1168,20 @@ fn two_admin_capable_limited_signers_accounting() {
 /// does not know that shape. Its self-removal must be rejected by the
 /// total-count backstop.
 #[test]
-fn sole_self_cosigner_signer_cannot_self_remove() {
+#[should_panic(expected = "Error(Contract, #103)")]
+fn constructor_rejects_a_self_cosigner_sole_signer() {
     let env = test_env();
     let a = Ed25519Signer::new(1);
     let key = a.signer_key(&env);
     let wallet = Address::generate(&env);
 
-    let client = register_wallet_at(
+    // `{wallet_self: Some([own_key])}` satisfies its own co-signer
+    // requirement, so it IS independently admin-capable — but `is_durable_admin`
+    // cannot see that and classifies it as non-admin. The constructor's
+    // admin_count guard therefore refuses it, which is the fail-safe direction:
+    // the shape the counter under-counts can no longer be a wallet's only
+    // signer, so the under-count can never strand one.
+    register_wallet_at(
         &env,
         &wallet,
         &a.signer(
@@ -1233,134 +1194,32 @@ fn sole_self_cosigner_signer_cannot_self_remove() {
             SignerStorage::Persistent,
         ),
     );
-
-    // Premise check: this signer really does authorize the admin surface
-    // ALONE (it is its own required co-signer) — the exact under-count shape.
-    let b = Ed25519Signer::new(2);
-    let payload_val = payload(&env, 7);
-    let new_signer: soroban_sdk::Val = b
-        .signer(
-            &env,
-            SignerExpiration(None),
-            SignerLimits(None),
-            SignerStorage::Persistent,
-        )
-        .into_val(&env);
-    assert_eq!(
-        env.try_invoke_contract_check_auth::<Error>(
-            &wallet,
-            &payload_val,
-            Signatures(map![&env, (key.clone(), a.sign(&env, &payload_val))]).into_val(&env),
-            &vec![
-                &env,
-                contract_context(&env, &wallet, "add_signer", vec![&env, new_signer]),
-            ],
-        ),
-        Ok(())
-    );
-
-    // Self-removal AUTH also passes (pass-1 self-removal rule) — but
-    // EXECUTION rejects via the total-count backstop, full-stack.
-    let root_invocation = remove_signer_invocation(&env, &wallet, &key);
-    let nonce = 21i64;
-    let signature_expiration_ledger = env.ledger().sequence();
-    let payload = auth_payload(&env, nonce, signature_expiration_ledger, &root_invocation);
-
-    let root_auth = soroban_sdk::xdr::SorobanAuthorizationEntry {
-        credentials: soroban_sdk::xdr::SorobanCredentials::Address(
-            soroban_sdk::xdr::SorobanAddressCredentials {
-                address: wallet.clone().try_into().unwrap(),
-                nonce,
-                signature_expiration_ledger,
-                signature: Signatures(map![&env, (key.clone(), a.sign(&env, &payload))])
-                    .try_into()
-                    .unwrap(),
-            },
-        ),
-        root_invocation,
-    };
-
-    assert_eq!(
-        client.set_auths(&[root_auth]).try_remove_signer(&key),
-        Err(Ok(Error::LastSigner))
-    );
-    assert!(client.get_signer(&key).is_some());
-
-    // The legitimate escape: rotate — add a replacement, THEN self-remove.
-    client.mock_all_auths().add_signer(&b.signer(
-        &env,
-        SignerExpiration(None),
-        SignerLimits(None),
-        SignerStorage::Persistent,
-    ));
-    assert_eq!(client.mock_all_auths().try_remove_signer(&key), Ok(Ok(())));
 }
 
-/// EVERY sole-signer shape's last removal is rejected. The error code shows
-/// which guard fired: `LastAdminSigner` for shapes the admin counter tracks,
-/// `LastSigner` (the backstop) for everything else — either way, zero
-/// signers is unreachable.
 #[test]
-fn every_sole_signer_shape_last_removal_rejected() {
+fn every_admin_sole_signer_shape_last_removal_rejected() {
     let a = Ed25519Signer::new(1);
 
-    // (limits-builder, expected error) per shape. Built per-env below.
-    let cases: std::vec::Vec<(
-        &str,
+    // Only ADMIN shapes appear here: `__constructor` refuses to create a
+    // wallet whose sole signer is not independently admin-capable, so the
+    // non-admin shapes ("wallet-self: Some([own key])", "wallet-self:
+    // Some([other key])", "foreign contract only", "empty map") are covered by
+    // the constructor-rejection tests above instead of by removal guards.
+    type SoleSignerCase = (
+        &'static str,
         fn(&Env, &Address, &Ed25519Signer) -> SignerLimits,
-        Error,
-    )> = std::vec![
-        (
-            "unlimited",
-            |_, _, _| SignerLimits(None),
-            Error::LastAdminSigner
-        ),
-        (
-            "wallet-self: None",
-            |env, wallet, _| SignerLimits(Some(map![env, (wallet.clone(), None)])),
-            Error::LastAdminSigner,
-        ),
-        (
-            "wallet-self: Some([])",
-            |env, wallet, _| SignerLimits(Some(map![env, (wallet.clone(), Some(vec![env]))])),
-            Error::LastAdminSigner,
-        ),
-        (
-            "wallet-self: Some([own key])",
-            |env, wallet, a| {
-                SignerLimits(Some(map![
-                    env,
-                    (wallet.clone(), Some(vec![env, a.signer_key(env)]))
-                ]))
-            },
-            Error::LastSigner,
-        ),
-        (
-            "wallet-self: Some([other key])",
-            |env, wallet, _| {
-                SignerLimits(Some(map![
-                    env,
-                    (
-                        wallet.clone(),
-                        Some(vec![env, Ed25519Signer::new(9).signer_key(env)])
-                    )
-                ]))
-            },
-            Error::LastSigner,
-        ),
-        (
-            "foreign contract only",
-            |env, _, _| SignerLimits(Some(map![env, (Address::generate(env), None)])),
-            Error::LastSigner,
-        ),
-        (
-            "empty map",
-            |env, _, _| SignerLimits(Some(map![env])),
-            Error::LastSigner,
-        ),
+    );
+    let cases: std::vec::Vec<SoleSignerCase> = std::vec![
+        ("unlimited", |_, _, _| SignerLimits(None)),
+        ("wallet-self: None", |env, wallet, _| SignerLimits(Some(
+            map![env, (wallet.clone(), None)]
+        ))),
+        ("wallet-self: Some([])", |env, wallet, _| SignerLimits(
+            Some(map![env, (wallet.clone(), Some(vec![env]))])
+        )),
     ];
 
-    for (name, limits, expected) in cases {
+    for (name, limits) in cases {
         let env = test_env();
         let wallet = Address::generate(&env);
         let client = register_wallet_at(
@@ -1378,32 +1237,16 @@ fn every_sole_signer_shape_last_removal_rejected() {
             client
                 .mock_all_auths()
                 .try_remove_signer(&a.signer_key(&env)),
-            Err(Ok(expected)),
+            Err(Ok(Error::LastAdminSigner)),
             "sole-signer shape not protected: {name}"
         );
         assert!(client.get_signer(&a.signer_key(&env)).is_some());
     }
 
-    // Policy shapes: non-admin-shaped (empty map) → backstop; admin-shaped
-    // (wallet-self grant) → admin guard.
-    let env = test_env();
-    let policy = env.register(LifecyclePolicy, ());
-    let (_, client) = register_wallet(
-        &env,
-        &Signer::Policy(
-            policy.clone(),
-            SignerExpiration(None),
-            SignerLimits(Some(map![&env])),
-            SignerStorage::Persistent,
-        ),
-    );
-    assert_eq!(
-        client
-            .mock_all_auths()
-            .try_remove_signer(&SignerKey::Policy(policy.clone())),
-        Err(Ok(Error::LastSigner))
-    );
-
+    // An admin-shaped policy (wallet-self grant) is a deployable sole signer
+    // and is protected by the admin guard. A non-admin-shaped policy is not
+    // deployable as a sole signer at all — see the constructor-rejection
+    // tests — so there is no backstop case left to exercise here.
     let env = test_env();
     let policy = env.register(LifecyclePolicy, ());
     let wallet = Address::generate(&env);
@@ -1433,7 +1276,7 @@ fn non_admin_rotation_still_works() {
     let a = Ed25519Signer::new(1);
     let b = Ed25519Signer::new(2);
 
-    let (_, client) = register_wallet(
+    let (_, client) = register_wallet_with(
         &env,
         &a.signer(
             &env,
@@ -1457,12 +1300,21 @@ fn non_admin_rotation_still_works() {
         Ok(Ok(()))
     );
 
-    // ...and the survivor is the new last signer.
+    // The survivor is freely removable too: the genesis admin the constructor
+    // requires is still there, so neither guard fires.
     assert_eq!(
         client
             .mock_all_auths()
             .try_remove_signer(&b.signer_key(&env)),
-        Err(Ok(Error::LastSigner))
+        Ok(Ok(()))
+    );
+
+    // ...and that admin is what cannot be removed.
+    assert_eq!(
+        client
+            .mock_all_auths()
+            .try_remove_signer(&genesis_admin().signer_key(&env)),
+        Err(Ok(Error::LastAdminSigner))
     );
 }
 
@@ -1490,7 +1342,7 @@ fn evicted_temporary_signer_does_not_unlock_last_removal() {
         &a.signer(
             &env,
             SignerExpiration(None),
-            SignerLimits(Some(map![&env])), // non-admin: only the backstop protects
+            SignerLimits(None),
             SignerStorage::Persistent,
         ),
     );
@@ -1525,7 +1377,7 @@ fn evicted_temporary_signer_does_not_unlock_last_removal() {
     // A is genuinely the last live signer, and the durable counter knows it.
     assert_eq!(
         client.mock_all_auths().try_remove_signer(&a_key),
-        Err(Ok(Error::LastSigner))
+        Err(Ok(Error::LastAdminSigner))
     );
     assert!(client.get_signer(&a_key).is_some());
 }
@@ -1543,7 +1395,7 @@ fn expired_signer_does_not_unlock_last_removal() {
         &a.signer(
             &env,
             SignerExpiration(None),
-            SignerLimits(Some(map![&env])),
+            SignerLimits(None),
             SignerStorage::Persistent,
         ),
     );
@@ -1561,7 +1413,7 @@ fn expired_signer_does_not_unlock_last_removal() {
         client
             .mock_all_auths()
             .try_remove_signer(&a.signer_key(&env)),
-        Err(Ok(Error::LastSigner))
+        Err(Ok(Error::LastAdminSigner))
     );
 
     // The dead-but-stored B itself is non-durable: freely removable.
@@ -1575,8 +1427,12 @@ fn expired_signer_does_not_unlock_last_removal() {
 
 /// Demoting the last durable signer via `update_signer` — to Temporary
 /// storage or to an expiring value — is a deferred removal (the entry can
-/// then evict/lapse to zero with no call to guard): rejected. Non-admin
-/// shape, so the error proves the DURABLE guard (104), not the admin one.
+/// then evict/lapse to zero with no call to guard): rejected.
+///
+/// The sole signer is an ADMIN because `__constructor` now refuses to create
+/// a wallet without one. That makes 103 the reachable error here: 104 remains
+/// as an independent backstop, unreachable through `update_signer` because
+/// the last durable signer is necessarily also the last durable admin.
 #[test]
 fn cannot_demote_last_durable_signer_via_update() {
     let env = test_env();
@@ -1587,7 +1443,7 @@ fn cannot_demote_last_durable_signer_via_update() {
         &a.signer(
             &env,
             SignerExpiration(None),
-            SignerLimits(Some(map![&env])),
+            SignerLimits(None),
             SignerStorage::Persistent,
         ),
     );
@@ -1596,20 +1452,20 @@ fn cannot_demote_last_durable_signer_via_update() {
         client.mock_all_auths().try_update_signer(&a.signer(
             &env,
             SignerExpiration(None),
-            SignerLimits(Some(map![&env])),
+            SignerLimits(None),
             SignerStorage::Temporary,
         )),
-        Err(Ok(Error::LastSigner))
+        Err(Ok(Error::LastAdminSigner))
     );
 
     assert_eq!(
         client.mock_all_auths().try_update_signer(&a.signer(
             &env,
             SignerExpiration(Some(u64::MAX)),
-            SignerLimits(Some(map![&env])),
+            SignerLimits(None),
             SignerStorage::Persistent,
         )),
-        Err(Ok(Error::LastSigner))
+        Err(Ok(Error::LastAdminSigner))
     );
 
     // With a second durable signer present the demotion is fine.
@@ -1619,7 +1475,7 @@ fn cannot_demote_last_durable_signer_via_update() {
         client.mock_all_auths().try_update_signer(&a.signer(
             &env,
             SignerExpiration(None),
-            SignerLimits(Some(map![&env])),
+            SignerLimits(None),
             SignerStorage::Temporary,
         )),
         Ok(Ok(()))
@@ -1672,7 +1528,7 @@ fn secp256r1_signer_roundtrip() {
 
     // Bootstrap with a durable admin (the constructor requires a durable
     // first signer), then exercise the Temporary Secp256r1 roundtrip.
-    let (_, client) = register_wallet(
+    let (wallet, client) = register_wallet(
         &env,
         &Ed25519Signer::new(9).signer(
             &env,
@@ -1681,12 +1537,15 @@ fn secp256r1_signer_roundtrip() {
             SignerStorage::Persistent,
         ),
     );
-    client.mock_all_auths().add_signer(&passkey.signer(
+    let signer = passkey.signer(
         &env,
         SignerExpiration(None),
         SignerLimits(None),
         SignerStorage::Temporary,
-    ));
+    );
+    client
+        .mock_all_auths()
+        .add_secp256r1(&signer, &passkey.add_proof(&env, &wallet, &signer));
 
     assert_eq!(
         client.get_signer(&SignerKey::Secp256r1(Bytes::from_slice(

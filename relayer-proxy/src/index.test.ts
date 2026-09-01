@@ -123,7 +123,8 @@ function makeEnv(
       opts.allowedWasmHashes === undefined
         ? WALLET_WASM_HASH
         : opts.allowedWasmHashes,
-    ALLOWED_WALLET_FUNCTIONS: "add_signer,update_signer,remove_signer,upgrade",
+    ALLOWED_WALLET_FUNCTIONS:
+      "add_signer,add_secp256r1,update_signer,remove_signer,upgrade",
     ALLOWED_DEPLOYER_ADDRESSES: opts.allowedDeployers ?? DEPLOYER,
     MAX_RESOURCE_FEE_STROOPS: opts.maxFee ?? "1000000",
     RATE_LIMIT_WINDOW_SECONDS: "60",

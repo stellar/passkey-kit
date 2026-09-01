@@ -27,14 +27,12 @@ fn check_raw(
     let env = test_env();
     let passkey = Passkey::new(1);
 
-    let (wallet, _) = register_wallet(
+    let (wallet, _) = register_passkey_wallet(
         &env,
-        &passkey.signer(
-            &env,
-            SignerExpiration(None),
-            SignerLimits(None),
-            SignerStorage::Persistent,
-        ),
+        &passkey,
+        SignerExpiration(None),
+        SignerLimits(None),
+        SignerStorage::Persistent,
     );
 
     let payload = payload(&env, 7);
@@ -109,14 +107,12 @@ proptest! {
         let env = test_env();
         let passkey = Passkey::new(1);
 
-        let (wallet, _) = register_wallet(
+        let (wallet, _) = register_passkey_wallet(
             &env,
-            &passkey.signer(
-                &env,
-                SignerExpiration(None),
-                SignerLimits(None),
-                SignerStorage::Persistent,
-            ),
+            &passkey,
+            SignerExpiration(None),
+            SignerLimits(None),
+            SignerStorage::Persistent,
         );
 
         let payload = payload(&env, 7);

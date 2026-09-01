@@ -3,7 +3,23 @@
 v1 is a ground-up overhaul of the contract, SDK, and services. It has **no backwards-compatibility layer** — every change below is a clean cut from the `0.12.x` line. If you only ever call `connectWallet()` and submit through `PasskeyServer`, the two changes that will touch your code are the **signing API** (a `Signer` instance instead of an options object) and the **`TransactionResult`** discriminated union.
 
 > [!IMPORTANT]
-> **Contract compatibility.** v1 is a new on-chain contract (new WASM hash, renumbered errors, new event schema, timestamp expirations). Wallets deployed from the pre-1.0 contract remain live and keep their addresses (the [derivation tuple](./deployments-testnet-2026-07-11.md#deterministic-wallet-address-derivation-normative) is unchanged), but they run the legacy code until upgraded in place. A v1 SDK talks to v1 wallets; it still *decodes* legacy error codes (family `SmartWalletLegacy`) so failures from a legacy wallet are legible.
+> **Contract compatibility.** `0.17.0` requires wallets created by the new
+> provenance contract. Pre-`0.17.0` wallets remain on-chain, but this SDK does
+> not connect to them. This alpha release has no migration or legacy bypass.
+
+## 0.17.0: verified wallet birth and signer provenance
+
+`createWallet` now returns deployment data without storing a wallet record.
+Submit the deployment, then call `confirmWalletCreation(created, transactionHash)`.
+That call verifies the direct `CreateContractV2` transaction and stores its birth data.
+
+Fresh-device connection now needs `getWalletCandidates` from a schema-2 indexer.
+The SDK rejects derivation-only discovery.
+It also rejects incomplete, stale, or ambiguous indexer results.
+
+The indexer returns every candidate with `birthWasmHash`,
+`creationTransactionHash`, and `creationLedger`.
+The SDK verifies these claims through RPC or Horizon history.
 
 ## 0.15.0: shared deploy and restore sources
 
@@ -129,7 +145,7 @@ if (result.success) {
 
 - All thrown errors are now `PasskeyKitError` subclasses with a numeric `code`: `ConfigurationError`, `WalletNotConnectedError`, `WalletOwnershipError`, `WebAuthnError`, `SigningError`, `SignerNotFoundError`, `SimulationError`, `SubmissionError`, `ValidationError`, `IndexerError`, `RelayerError`, `ContractError`. Codes are grouped by concern (`1xxx`–`9xxx`, `10000` for contract-level).
 - **New decoding API:** `decodeContractError(diagnostic)`, `contractErrorFromCode(code)`, `CONTRACT_ERROR_REGISTRY`, and types `ContractErrorFamily` / `ContractErrorInfo`.
-- **Contract error codes were renumbered to 100–129** (see [README → Contract error decoding](../README.md#contract-error-decoding)). The legacy 1–9 codes still decode (family `SmartWalletLegacy`), so a failure from a legacy wallet is still legible.
+- **Contract error codes were renumbered to 100–133** (see [README → Contract error decoding](../README.md#contract-error-decoding)). The legacy 1–9 codes still decode for diagnostics.
 
 ```ts
 if (!result.success && result.error instanceof ContractError) {
@@ -194,11 +210,14 @@ import { IndexedDBStorage } from "passkey-kit/storage";
 const kit = new PasskeyKit({ /* … */, storage: new IndexedDBStorage() });
 ```
 
-`createWallet` then remembers the passkey → wallet record automatically, and `connectWallet` can resolve a wallet from local storage before falling back to an indexer.
+`confirmWalletCreation` stores a verified passkey and wallet birth record.
+`connectWallet` uses that record before it requests indexer candidates.
 
 ## Indexer & discovery
 
-- `PasskeyServer.getSigners` now returns the richer **`WalletSigner[]`** (from the `SignerIndexer` abstraction); the old flat `IndexedSigner` row type is **removed**. `getContractId` keeps its `{ keyId | publicKey | policy }` signature.
+- `PasskeyServer.getSigners` returns **`WalletSigner[]`**.
+- `PasskeyServer.getWalletCandidates` replaces `getContractId` and `getContractIds`.
+- The new method returns a complete lookup with immutable birth claims.
 - A `SignerIndexer` abstraction resolved by the keyless `MercuryIndexer` — exported from the main `passkey-kit` entry (browser-safe; no token), alongside the browser-safe types + `lookupWithRetry`.
 - **Live Mercury discovery is on by default** via Mercury's hosted, **keyless** passkey-indexer (both networks, full history, both signer generations). `MercuryConfig` collapsed to an optional `{ url? }`; the old `projectName`/`jwt`/`apiKey` and the interim `zephyrExecuteConfirmed` gate are gone. Resolve per network with `MercuryIndexer.forNetwork(...)`.
 
@@ -230,10 +249,10 @@ An explicit accounting of capabilities the pre-1.0 version had that v1 changes o
 
 | Old capability | v1 status | What to do instead |
 |---|---|---|
-| `connectWallet({ walletPublicKey })` — resolve/connect a wallet by an Ed25519 `G…` key | **Removed.** `connectWallet` is passkey-ownership-based by design: it verifies the connecting `keyId` is a live secp256r1 signer. | For reverse lookup by an Ed25519 or policy signer, use `server.getContractId({ publicKey })` / `{ policy }`, then operate on that address. There is no "connect as an Ed25519 identity" — sign with an `Ed25519Signer` against a passkey-connected wallet. |
+| `connectWallet({ walletPublicKey })` — resolve/connect a wallet by an Ed25519 `G…` key | **Removed.** `connectWallet` is passkey-ownership-based by design. | Use `server.getWalletCandidates({ publicKey })` for a reverse lookup. Operate on the returned address without passkey connection. |
 | `sign(xdrString \| Tx)` — sign a raw XDR string or `Tx` | **Removed** (lossy fallback). | `AssembledTransaction.fromXDR(...)` first, then `sign(txn)`. |
 | Per-call `rpId` on `sign` / `connectWallet` | **Moved to the constructor.** | Set `rpId` once on `new PasskeyKit({ rpId })`. |
-| **Live signer discovery via Mercury** (`getSigners` / `getContractId`) | **Live.** Rewired onto Mercury's hosted, **keyless** [passkey-indexer](https://docs.mercurydata.app/smart-wallet-indexers/introduction-1) — both networks (incl. testnet), full history, both signer generations. | Enumerate with `server.getSigners(contractId)` (returns `WalletSigner[]`) and reverse-lookup with `server.getContractId({ keyId \| publicKey \| policy })`, or use `MercuryIndexer.forNetwork(...)` directly. The deterministic `connectWallet()` path still covers the common reconnect case with **no** indexer. |
+| **Live signer discovery via Mercury** (`getSigners` / `getWalletCandidates`) | **Live.** Mercury supplies candidates and immutable birth claims. | Enumerate with `server.getSigners(contractId)`. Reverse lookup with `server.getWalletCandidates({ keyId \| publicKey \| policy })`. Fresh-device connection fails without a complete indexer response. |
 | Legacy `("sw_v1", …)` tuple events | **Replaced** by typed `#[contractevent]` events. | Consume the new `signer_added`/`signer_updated`/`signer_removed`/`upgraded` schema; Mercury's hosted passkey-indexer already does (and still indexes the legacy tuples for older wallets). |
 | Raw-TypeScript package (import internal source files) | **Removed** — ships compiled `dist/`. | Use the public entry points (`.`, `./storage`, `./server`). |
 

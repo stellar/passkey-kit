@@ -266,8 +266,47 @@ describe("MercuryIndexer eviction probe (audit H2)", () => {
   });
 });
 
+const BIRTH_HASH = "ab".repeat(32);
+const OTHER_BIRTH_HASH = "ef".repeat(32);
+const TX_HASH = "cd".repeat(32);
+const OTHER_TX_HASH = "11".repeat(32);
+const CREATION_LEDGER = 4_226_310;
+
+function birthFields(overrides?: {
+  contractId?: string;
+  birthWasmHash?: string;
+  creationTransactionHash?: string;
+  creationLedger?: number;
+}) {
+  return {
+    contract_id: overrides?.contractId ?? WALLET,
+    birth_wasm_hash: overrides?.birthWasmHash ?? BIRTH_HASH,
+    creation_transaction_hash: overrides?.creationTransactionHash ?? TX_HASH,
+    creation_ledger: overrides?.creationLedger ?? CREATION_LEDGER,
+  };
+}
+
+function secpPresent() {
+  const signerVal = walletSpec().nativeToScVal(
+    {
+      tag: "Secp256r1",
+      values: [Buffer.alloc(65), [undefined], [undefined]],
+    },
+    SIGNER_VAL_UDT
+  );
+  return { contractData: () => ({ val: () => signerVal }) };
+}
+
+function ed25519Present() {
+  const signerVal = walletSpec().nativeToScVal(
+    { tag: "Ed25519", values: [[undefined], [undefined]] },
+    SIGNER_VAL_UDT
+  );
+  return { contractData: () => ({ val: () => signerVal }) };
+}
+
 describe("MercuryIndexer.findWallets", () => {
-  it("looks up a Secp256r1 key by hex credential id", async () => {
+  it("returns a complete lookup with birth metadata after live confirmation", async () => {
     const keyId = base64url.encode(Buffer.alloc(16, 7));
     const derived = deriveContractAddress(
       base64url.toBuffer(keyId),
@@ -280,31 +319,189 @@ describe("MercuryIndexer.findWallets", () => {
       );
       return {
         body: {
-          credentialId: base64url.toBuffer(keyId).toString("hex"),
+          schema: 2,
+          complete: true,
+          indexed_through_ledger: CREATION_LEDGER,
           wallets: [
-            { contract_id: derived, generation: "v1", signer_count: 1 },
-            { contract_id: OTHER_WALLET, generation: "v1", signer_count: 1 },
+            birthFields({ contractId: derived }),
+            birthFields({
+              contractId: OTHER_WALLET,
+              birthWasmHash: OTHER_BIRTH_HASH,
+              creationTransactionHash: OTHER_TX_HASH,
+              creationLedger: CREATION_LEDGER + 1,
+            }),
           ],
-          count: 2,
         },
       };
     });
 
     const indexer = new MercuryIndexer({
       url: BASE,
-      hardening: { networkPassphrase: TESTNET, deployerPublicKey: DEPLOYER },
+      rpc: fakeRpc(vi.fn(async () => ({ entries: [{ val: secpPresent() }] }))),
     });
-    const wallets = await indexer.findWallets(SignerKey.Secp256r1(keyId));
+    const lookup = await indexer.findWallets(SignerKey.Secp256r1(keyId));
 
-    // OTHER_WALLET is dropped: not the derived address and no rpc to confirm it.
-    expect(wallets).toEqual([derived]);
+    expect(lookup.complete).toBe(true);
+    expect(lookup.indexedThroughLedger).toBe(CREATION_LEDGER);
+    expect(lookup.candidates).toEqual([
+      {
+        contractId: derived,
+        birthWasmHash: BIRTH_HASH,
+        creationTransactionHash: TX_HASH,
+        creationLedger: CREATION_LEDGER,
+      },
+      {
+        contractId: OTHER_WALLET,
+        birthWasmHash: OTHER_BIRTH_HASH,
+        creationTransactionHash: OTHER_TX_HASH,
+        creationLedger: CREATION_LEDGER + 1,
+      },
+    ]);
     expect(mock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps both live candidates and their birth fields when the lookup is ambiguous", async () => {
+    stubFetch(() => ({
+      body: {
+        schema: 2,
+        complete: true,
+        indexedThroughLedger: CREATION_LEDGER,
+        candidates: [
+          birthFields({ contractId: WALLET }),
+          birthFields({
+            contractId: OTHER_WALLET,
+            birthWasmHash: OTHER_BIRTH_HASH,
+            creationTransactionHash: OTHER_TX_HASH,
+          }),
+        ],
+      },
+    }));
+
+    const indexer = new MercuryIndexer({
+      url: BASE,
+      rpc: fakeRpc(vi.fn(async () => ({ entries: [{ val: secpPresent() }] }))),
+    });
+    const lookup = await indexer.findWallets(
+      SignerKey.Secp256r1(base64url.encode(Buffer.alloc(16, 3)))
+    );
+
+    expect(lookup.complete).toBe(true);
+    expect(lookup.candidates.map((c) => c.contractId)).toEqual([
+      WALLET,
+      OTHER_WALLET,
+    ]);
+    expect(lookup.candidates[0]?.birthWasmHash).toBe(BIRTH_HASH);
+    expect(lookup.candidates[1]?.birthWasmHash).toBe(OTHER_BIRTH_HASH);
+  });
+
+  it("marks old lookup shapes incomplete and does not invent birth data", async () => {
+    const keyId = base64url.encode(Buffer.alloc(16, 7));
+    stubFetch(() => ({
+      body: {
+        credentialId: base64url.toBuffer(keyId).toString("hex"),
+        wallets: [
+          { contract_id: WALLET, generation: "v1", signer_count: 1 },
+          { contract_id: OTHER_WALLET, generation: "v1", signer_count: 1 },
+        ],
+        count: 2,
+      },
+    }));
+
+    const indexer = new MercuryIndexer({
+      url: BASE,
+      rpc: fakeRpc(vi.fn(async () => ({ entries: [{ val: secpPresent() }] }))),
+    });
+    const lookup = await indexer.findWallets(SignerKey.Secp256r1(keyId));
+
+    expect(lookup.complete).toBe(false);
+    expect(lookup.indexedThroughLedger).toBeUndefined();
+    expect(lookup.candidates).toEqual([
+      { contractId: WALLET },
+      { contractId: OTHER_WALLET },
+    ]);
+  });
+
+  it("marks a claimed-complete lookup incomplete when a birth field is missing", async () => {
+    stubFetch(() => ({
+      body: {
+        schema: 2,
+        complete: true,
+        indexed_through_ledger: CREATION_LEDGER,
+        wallets: [
+          birthFields({ contractId: WALLET }),
+          {
+            contract_id: OTHER_WALLET,
+            birth_wasm_hash: OTHER_BIRTH_HASH,
+            creation_ledger: CREATION_LEDGER,
+          },
+        ],
+      },
+    }));
+
+    const indexer = new MercuryIndexer({
+      url: BASE,
+      rpc: fakeRpc(vi.fn(async () => ({ entries: [{ val: secpPresent() }] }))),
+    });
+    const lookup = await indexer.findWallets(
+      SignerKey.Secp256r1(base64url.encode(Buffer.alloc(16, 1)))
+    );
+
+    expect(lookup.complete).toBe(false);
+    expect(lookup.indexedThroughLedger).toBe(CREATION_LEDGER);
+    expect(lookup.candidates[1]).toEqual({
+      contractId: OTHER_WALLET,
+      birthWasmHash: OTHER_BIRTH_HASH,
+      creationLedger: CREATION_LEDGER,
+    });
+    expect(lookup.candidates[1]?.creationTransactionHash).toBeUndefined();
+  });
+
+  it("drops a candidate that fails live confirmation and keeps birth metadata on the rest", async () => {
+    stubFetch(() => ({
+      body: {
+        schema: 2,
+        complete: true,
+        indexed_through_ledger: CREATION_LEDGER,
+        wallets: [
+          birthFields({ contractId: WALLET }),
+          birthFields({
+            contractId: OTHER_WALLET,
+            birthWasmHash: OTHER_BIRTH_HASH,
+            creationTransactionHash: OTHER_TX_HASH,
+          }),
+        ],
+      },
+    }));
+
+    let calls = 0;
+    const indexer = new MercuryIndexer({
+      url: BASE,
+      rpc: fakeRpc(
+        vi.fn(async () => {
+          calls += 1;
+          return {
+            entries: calls === 1 ? [{ val: secpPresent() }] : [],
+          };
+        })
+      ),
+    });
+
+    const lookup = await indexer.findWallets(
+      SignerKey.Secp256r1(base64url.encode(Buffer.alloc(16, 2)))
+    );
+
+    expect(lookup.complete).toBe(true);
+    expect(lookup.candidates).toEqual([
+      {
+        contractId: WALLET,
+        birthWasmHash: BIRTH_HASH,
+        creationTransactionHash: TX_HASH,
+        creationLedger: CREATION_LEDGER,
+      },
+    ]);
+  });
+
   it("rpc-confirms the DERIVED candidate instead of trusting the match", async () => {
-    // derive(keyId) is the address an attacker can squat, so matching derivation
-    // is not confirmation. With rpc available it must still be read on-chain,
-    // and dropped when the signer entry is absent.
     const keyId = base64url.encode(Buffer.alloc(16, 9));
     const derived = deriveContractAddress(
       base64url.toBuffer(keyId),
@@ -313,21 +510,23 @@ describe("MercuryIndexer.findWallets", () => {
     );
     stubFetch(() => ({
       body: {
-        credentialId: base64url.toBuffer(keyId).toString("hex"),
-        wallets: [{ contract_id: derived, generation: "v1", signer_count: 1 }],
-        count: 1,
+        schema: 2,
+        complete: true,
+        indexed_through_ledger: CREATION_LEDGER,
+        wallets: [birthFields({ contractId: derived })],
       },
     }));
 
-    const getLedgerEntries = vi.fn(async () => ({ entries: [] })); // absent
+    const getLedgerEntries = vi.fn(async () => ({ entries: [] }));
     const indexer = new MercuryIndexer({
       url: BASE,
       rpc: fakeRpc(getLedgerEntries),
       hardening: { networkPassphrase: TESTNET, deployerPublicKey: DEPLOYER },
     });
 
-    const wallets = await indexer.findWallets(SignerKey.Secp256r1(keyId));
-    expect(wallets).toEqual([]);
+    const lookup = await indexer.findWallets(SignerKey.Secp256r1(keyId));
+    expect(lookup.complete).toBe(true);
+    expect(lookup.candidates).toEqual([]);
     expect(getLedgerEntries).toHaveBeenCalled();
   });
 
@@ -336,44 +535,45 @@ describe("MercuryIndexer.findWallets", () => {
       expect(url).toContain(`/api/lookup/address/${ED25519}`);
       return {
         body: {
-          signerAddress: ED25519,
-          wallets: [{ contract_id: OTHER_WALLET, generation: "v1", signer_count: 1 }],
-          count: 1,
+          schema: 2,
+          complete: true,
+          indexed_through_ledger: CREATION_LEDGER,
+          wallets: [birthFields({ contractId: OTHER_WALLET })],
         },
       };
     });
 
-    // rpc confirms the candidate still holds the signer entry on-chain.
-    const signerVal = walletSpec().nativeToScVal(
-      { tag: "Ed25519", values: [[undefined], [undefined]] },
-      SIGNER_VAL_UDT
-    );
-    const present = { contractData: () => ({ val: () => signerVal }) };
     const indexer = new MercuryIndexer({
       url: BASE,
-      rpc: fakeRpc(vi.fn(async () => ({ entries: [{ val: present }] }))),
+      rpc: fakeRpc(vi.fn(async () => ({ entries: [{ val: ed25519Present() }] }))),
     });
-    const wallets = await indexer.findWallets(SignerKey.Ed25519(ED25519));
-    expect(wallets).toEqual([OTHER_WALLET]);
+    const lookup = await indexer.findWallets(SignerKey.Ed25519(ED25519));
+    expect(lookup.complete).toBe(true);
+    expect(lookup.candidates).toEqual([
+      {
+        contractId: OTHER_WALLET,
+        birthWasmHash: BIRTH_HASH,
+        creationTransactionHash: TX_HASH,
+        creationLedger: CREATION_LEDGER,
+      },
+    ]);
     expect(mock).toHaveBeenCalledTimes(1);
   });
 
   it("fails CLOSED when candidates exist but no confirmation route does", async () => {
     stubFetch(() => ({
       body: {
-        signerAddress: ED25519,
-        wallets: [{ contract_id: OTHER_WALLET, generation: "v1", signer_count: 1 }],
-        count: 1,
+        schema: 2,
+        complete: true,
+        indexed_through_ledger: CREATION_LEDGER,
+        wallets: [birthFields({ contractId: OTHER_WALLET })],
       },
     }));
 
-    // No rpc + no hardening: unconfirmed rows must never be returned.
     await expect(
       new MercuryIndexer({ url: BASE }).findWallets(SignerKey.Ed25519(ED25519))
     ).rejects.toBeInstanceOf(IndexerError);
 
-    // hardening only derives Secp256r1 — an Ed25519 lookup still has no
-    // confirmation route, and must throw rather than silently drop.
     await expect(
       new MercuryIndexer({
         url: BASE,
@@ -382,20 +582,27 @@ describe("MercuryIndexer.findWallets", () => {
     ).rejects.toBeInstanceOf(IndexerError);
   });
 
-  it("returns [] without a confirmation route when there are no candidates", async () => {
+  it("returns an incomplete empty lookup when there are no candidates", async () => {
     stubFetch(() => ({ body: { wallets: [], count: 0 } }));
-    const wallets = await new MercuryIndexer({ url: BASE }).findWallets(
+    const lookup = await new MercuryIndexer({ url: BASE }).findWallets(
       SignerKey.Ed25519(ED25519)
     );
-    expect(wallets).toEqual([]);
+    expect(lookup).toEqual({ complete: false, candidates: [] });
   });
 
-  it("returns [] on a 404 lookup", async () => {
+  it("returns an incomplete empty lookup on a 404", async () => {
     stubFetch(() => ({ status: 404, body: { error: "not found" } }));
-    const wallets = await new MercuryIndexer({ url: BASE }).findWallets(
+    const lookup = await new MercuryIndexer({ url: BASE }).findWallets(
       SignerKey.Policy(OTHER_WALLET)
     );
-    expect(wallets).toEqual([]);
+    expect(lookup).toEqual({ complete: false, candidates: [] });
+  });
+
+  it("propagates transport errors", async () => {
+    stubFetch(() => ({ status: 503, body: "upstream" }));
+    await expect(
+      new MercuryIndexer({ url: BASE }).findWallets(SignerKey.Ed25519(ED25519))
+    ).rejects.toBeInstanceOf(IndexerError);
   });
 });
 

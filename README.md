@@ -71,7 +71,7 @@ const kit = new PasskeyKit({
   rpcUrl: "https://soroban-testnet.stellar.org",
   networkPassphrase: "Test SDF Network ; September 2015",
   // Canonical smart-wallet WASM hash; see docs/deployments-*.md
-  walletWasmHash: "502ea4e7bdb3ea99880941f1d35ceb67fb598692c0bb40f842ef9c9f17d58b58",
+  walletWasmHash: "97ce047884106b1c6c3bb40b8973cc48db1c4dad95c9e20462bf2c701daa764e",
 });
 ```
 
@@ -80,11 +80,12 @@ const kit = new PasskeyKit({
 `createWallet` runs the passkey registration ceremony and builds a **signed** deploy transaction. Submission is a separate, server-side step. The kit remains disconnected until the deployment succeeds and `connectWallet` verifies it.
 
 ```ts
-const { keyIdBase64, contractId, signedTx } = await kit.createWallet(
+const created = await kit.createWallet(
   "My App",           // shown in the passkey prompt
   "user@example.com", // user identifier
 );
-// `signedTx` is a base64 XDR string ready to submit; `contractId` is the wallet address (C…).
+// `created.signedTx` is ready to submit.
+// `created.contractId` is the predicted wallet address (C…).
 ```
 
 ### 3. Submit through the server
@@ -103,7 +104,7 @@ const server = new PasskeyServer({
   },
 });
 
-const result = await server.send(signedTx);
+const result = await server.send(created.signedTx);
 if (result.success) {
   console.log("deployed in tx", result.hash);
 } else {
@@ -111,12 +112,20 @@ if (result.success) {
 }
 ```
 
-### 4. Connect after confirmation
+### 4. Confirm and connect
 
 ```ts
-const { contractId } = await kit.connectWallet({ keyId: keyIdBase64 });
-// Resolves the wallet from the passkey and VERIFIES the passkey is a live signer on it.
+if (!result.success) throw result.error;
+
+await kit.confirmWalletCreation(created, result.hash);
+const { contractId } = await kit.connectWallet({
+  keyId: created.keyIdBase64,
+});
 ```
+
+`confirmWalletCreation` verifies the successful `CreateContractV2` transaction.
+It then stores the immutable wallet birth record.
+`connectWallet` also verifies the current code, signer proof, and fresh assertion.
 
 ### 5. Sign & submit a transfer
 
@@ -147,9 +156,14 @@ Browser-side facade for wallet lifecycle and signing. Holds no secrets.
 | `rpcUrl` | `string` | Yes | Stellar RPC URL. |
 | `networkPassphrase` | `string` | Yes | Network passphrase. |
 | `walletWasmHash` | `string` (hex) | Yes | Smart-wallet WASM hash used to deploy new wallets. |
-| `acceptedWasmHashes` | `string[]` (hex) | No | Code identities accepted when connecting to a wallet resolved from an untrusted source (indexer lookup or derivation). Defaults to `[walletWasmHash]`. Add each hash as upgrades roll out — see [security notes](./docs/security-deterministic-deployer.md). |
+| `acceptedWasmHashes` | `string[]` (hex) | No | Current wallet code hashes accepted during connection. Defaults to `[walletWasmHash]`. |
+| `acceptedBirthWasmHashes` | `string[]` (hex) | No | Immutable creation code hashes accepted during connection. Defaults to `[walletWasmHash]`. |
+| `horizonUrl` | `string` | No | Full-history Horizon URL for creation transactions outside RPC retention. Public networks use official Horizon endpoints by default. |
 | `rpId` | `string` | No | WebAuthn Relying Party id (domain). Defaults to the current origin. |
+| `allowedOrigins` | `readonly string[]` | No | Origins accepted for signer proofs. Defaults to the browser origin. Required with `rpId` outside a browser. |
+| `requireUserVerification` | `boolean` | No | Require the WebAuthn User Verified flag during SDK proof checks. Defaults to `false`; User Presence remains required. |
 | `deploySource` | `string` (`S…`) | No | Secret key for a deployer you control, which then sources and pays for its own deployments. Defaults to the canonical deterministic deployer, which is sign-only and never pays. **Overriding it changes derived wallet addresses** (see [Deterministic derivation](#deterministic-derivation)). |
+| `restoreSource` | `string` (`S…`) | No | Funded source used only for footprint restoration. The shared deployer cannot fund restores. |
 | `timeoutInSeconds` | `number` | No | Transaction time bound (default `30`; the relayer requires `<= 30`). |
 | `storage` | `StorageAdapter` | No | Passkey-record persistence (see [Storage adapters](#storage-adapters)). |
 | `WebAuthn` | `WebAuthnClient` | No | Custom `startRegistration`/`startAuthentication` (for testing). |
@@ -170,8 +184,9 @@ Browser-side facade for wallet lifecycle and signing. Holds no secrets.
 | Method | Returns | Description |
 |---|---|---|
 | `createKey(appName, userName, options?)` | `CreatedPasskey` | Run a passkey registration ceremony **without** deploying a wallet. |
-| `createWallet(appName, userName, options?)` | `CreateWalletResult` | Register a passkey and build a deploy carrier. The kit remains disconnected until submission succeeds and `connectWallet` verifies the wallet. For the shared deployer the carrier holds a signed authorization entry and no envelope signature. |
-| `connectWallet(options?)` | `ConnectWalletResult` | Resolve a wallet from a passkey (local storage → injected indexer lookup → deterministic derivation) and **verify** the passkey is a live signer on it. |
+| `createWallet(appName, userName, options?)` | `CreateWalletResult` | Register a passkey and build a deploy carrier. The kit remains disconnected. |
+| `confirmWalletCreation(created, transactionHash)` | `VerifiedWalletBirth` | Verify a successful direct deployment and store its immutable birth record. |
+| `connectWallet(options?)` | `ConnectWalletResult` | Resolve verified storage or complete indexer candidates. Every candidate receives all ownership checks. |
 | `disconnect()` | `void` | Clear the connected wallet/keyId. |
 | `requireWallet()` | `PasskeyClient` | Return the connected wallet or throw `WalletNotConnectedError`. |
 
@@ -181,9 +196,8 @@ Browser-side facade for wallet lifecycle and signing. Holds no secrets.
 
 | Option | Type | Description |
 |---|---|---|
-| `keyId` | `string \| Uint8Array` | Connect a specific credential, skipping the discovery ceremony. |
-| `getContractId` | `(keyId: string) => Promise<string \| undefined>` | Indexer-backed keyId → wallet lookup, tried after local storage and before deterministic derivation. |
-| `verifyWasmHash` | `boolean` | Override the code-identity check against `acceptedWasmHashes`. Defaults to **on** for indexer, derivation, primary prediction, and legacy storage rows. It defaults to **off** only for an explicitly secondary stored association, where an upgraded wallet would otherwise be locked out. |
+| `keyId` | `string \| Uint8Array` | Select a credential directly. An untrusted path still runs a constrained proof ceremony. |
+| `getWalletCandidates` | `(keyId: string) => Promise<WalletCandidateLookup>` | Return every candidate with birth claims and a complete indexed ledger position. |
 
 ### Signing methods
 
@@ -229,7 +243,7 @@ Each method builds an `AssembledTransaction` (`WalletTx`) that wraps one contrac
 
 | Method | Wrapped contract fn | Description |
 |---|---|---|
-| `addSecp256r1(keyId, publicKey, limits, store, expiration?)` | `add_signer` | Add a passkey signer. |
+| `addSecp256r1(keyId, publicKey, limits, store, expiration?)` | `add_secp256r1` | Add a passkey signer with an address-bound proof. |
 | `updateSecp256r1(keyId, limits, store, expiration?)` | `update_signer` | Update a passkey signer's limits/storage/expiration. The public key is re-read from the ledger, never caller-supplied. |
 | `addEd25519(publicKey, limits, store, expiration?)` | `add_signer` | Add an Ed25519 signer (`publicKey` = `G…`). |
 | `updateEd25519(publicKey, limits, store, expiration?)` | `update_signer` | Update an Ed25519 signer. |
@@ -281,7 +295,7 @@ Server-only facade (`passkey-kit/server`). Holds the relayer secret — never im
 | Option | Type | Required | Description |
 |---|---|---|---|
 | `networkPassphrase` | `string` | Yes | Network passphrase. |
-| `rpcUrl` | `string` | No | Stellar RPC URL. Enables the temporary-signer eviction probe in `getSigners`. |
+| `rpcUrl` | `string` | No | Stellar RPC URL. Required for verified reverse lookup. It also enables eviction probes. |
 | `relayer` | `RelayerClientConfig` | No | Fee-sponsored submission (below). |
 | `mercury` | `MercuryConfig` | No | Mercury's keyless hosted passkey-indexer (below). |
 
@@ -292,12 +306,12 @@ Server-only facade (`passkey-kit/server`). Holds the relayer secret — never im
 
 | Method | Returns | Description |
 |---|---|---|
-| `send(input, options?)` | `TransactionResult` | Submit an `AssembledTransaction \| Transaction \| string` via the relayer. Picks the `{ func, auth }` Soroban path for wallet invocations and the `{ xdr }` fee-bump path for deploys / source-account auth. **Never throws.** |
+| `send(input, options?)` | `TransactionResult` | Submit an `AssembledTransaction \| Transaction \| string` via the relayer. Uses `{ func, auth }` for one host function without source-account auth. Uses `{ xdr }` otherwise. **Never throws.** |
 | `getTransaction(transactionId)` | `TransactionResult` | Poll a `skipWait` submission by its relayer id. |
 | `getSigners(contractId)` | `WalletSigner[]` | Enumerate a wallet's signers via the indexer (flags evicted temporary signers when `rpcUrl` is set). |
-| `getContractId(options, index?)` | `string \| undefined` | Reverse lookup: the wallet address for a signer. `options` = exactly one of `{ keyId }`, `{ publicKey }`, `{ policy }`. |
+| `getWalletCandidates(options)` | `WalletCandidateLookup` | Return every wallet candidate with its immutable birth claims. |
 
-`options` for `send`/`getTransaction` is `{ skipWait?: boolean, fundRelayerId?: string }`. `getSigners`/`getContractId` delegate to a [`MercuryIndexer`](#discovery-indexer) over the keyless hosted endpoint.
+`options` for `send`/`getTransaction` is `{ skipWait?: boolean, fundRelayerId?: string }`. The discovery methods delegate to [`MercuryIndexer`](#discovery-indexer).
 
 ## Submission (relayer)
 
@@ -305,8 +319,8 @@ All wallet writes are fee-sponsored by the [OpenZeppelin Relayer Channels](https
 
 Two submission modes are chosen automatically:
 
-- **`{ func, auth }`** (`submitSorobanTransaction`) — for wallet invocations (transfers, signer management) whose auth is carried by Address credentials. The relayer builds the envelope.
-- **`{ xdr }`** (`submitTransaction`) — for an already-signed envelope that needs a fee bump (custom-`deploySource` deploys / source-account auth). Shared-deployer deploys never take this path.
+- **`{ func, auth }`** (`submitSorobanTransaction`) — for one host function without source-account auth. This includes shared-deployer deployments.
+- **`{ xdr }`** (`submitTransaction`) — for a complete envelope with source-account auth or more than one operation.
 
 ### Browsers: the relayer-proxy worker
 
@@ -314,7 +328,17 @@ The relayer API key is a secret, so a browser must never hold it. The [`relayer-
 
 ## Discovery (indexer)
 
-The "reconnect" path needs no indexer: `connectWallet` resolves from storage or deterministic derivation, then confirms ownership on-chain. A stored primary row remains a deployment prediction and receives the code-identity check. Only an explicit secondary association is trusted local state. An indexer supports richer discovery across a wallet's full signer set.
+The reconnect path uses verified local storage or a complete indexer response.
+
+The SDK does not use deterministic derivation for wallet discovery.
+
+Each indexer candidate includes the creation transaction hash, ledger, and birth WASM hash.
+
+The SDK verifies those claims through Stellar RPC or Horizon history.
+
+The SDK then verifies current code, the live signer, the stored proof, and a fresh assertion.
+
+The SDK rejects incomplete, stale, or ambiguous lookup results.
 
 The SDK abstracts discovery behind a `SignerIndexer` interface (`getSigners` / `findWallets` / `health`), implemented by the **keyless** `MercuryIndexer` — exported from the main `passkey-kit` entry (no secret, so it runs in the browser):
 
@@ -327,7 +351,9 @@ The SDK abstracts discovery behind a `SignerIndexer` interface (`getSigners` / `
 
 ```ts
 const indexer = MercuryIndexer.forNetwork({ rpc }, networkPassphrase);
-const wallets = await lookupWithRetry(() => indexer!.findWallets(SignerKey.Secp256r1(keyId)));
+const lookup = await lookupWithRetry(() =>
+  indexer!.findWallets(SignerKey.Secp256r1(keyId))
+);
 ```
 
 `lookupWithRetry(fn, { attempts?, delayMs?, predicate? })` (browser-safe) polls a lookup until it returns a non-empty result — useful right after a write, while the indexer catches up to the ledger.
@@ -366,7 +392,7 @@ const kit = new PasskeyKit({ rpcUrl, networkPassphrase, walletWasmHash, storage:
 
 All adapters implement `StorageAdapter` (`save` / `get` / `getByContract` / `getAll` / `delete` / `update` / `clear`) over `StoredPasskey` records.
 
-The kit stores deployment credentials with `isPrimary: true`. It stores added passkeys with `isPrimary: false`. A legacy row without this value receives the code-identity check.
+Each stored row includes a verified birth WASM hash, creation transaction hash, and creation ledger.
 
 ## Errors
 
@@ -391,7 +417,9 @@ Error classes: `ConfigurationError`, `WalletNotConnectedError`, `WalletOwnership
 
 ### Contract error decoding
 
-On-chain failures surface as `Error(Contract, #N)` in diagnostics. `decodeContractError`, `contractErrorFromCode`, and `CONTRACT_ERROR_REGISTRY` map the code to a typed `ContractError` with its enum name. The v1 contract renumbered its error space to **100–129** (disjoint from the legacy 1–9 range, which is still decoded as family `SmartWalletLegacy`):
+On-chain failures surface as `Error(Contract, #N)` in diagnostics. The v1.1 contract uses errors **100–133**, with retired gaps.
+
+The legacy 1–9 range still decodes as `SmartWalletLegacy`.
 
 | Code | Name | Meaning |
 |---|---|---|
@@ -463,16 +491,20 @@ Signer and signature expiration are **UNIX timestamps in seconds** (inclusive: v
 - **Hosted services can fail or return stale data.** Do not treat relayer or indexer responses as authoritative chain state. Confirm security-sensitive state through Stellar RPC.
 - **Keep at least one durable admin signer.** The contract rejects any change that would remove or demote its last durable (`Persistent`, non-expiring) admin signer (`LastAdminSigner = 103`) or leave it without any durable signer (`LastSigner = 104`), so a wallet always retains one signer that cannot evict or expire. Signers outside that guard — `Temporary` storage or with an expiration — lapse on their own: add a replacement *before* removing or demoting an existing signer.
 - **The default deployer is a shared, public keypair — its secret is publicly derivable.** It salts deployment and signs only the CreateContractV2 authorization entry; the relayer supplies the envelope source, sequence, and fees. It never controls the wallet. Its determinism is load-bearing for discovery: overriding `deploySource` changes every derived address and breaks keyId → wallet lookup. Use a separate funded `restoreSource` for `restoreFootprint`; never fund the shared deployer. A third-party `bumpSequence` to `INT64_MAX` no longer blocks the current SDK because it never uses the shared deployer as an envelope source. Full analysis: [`docs/security-deterministic-deployer.md`](docs/security-deterministic-deployer.md).
-- **Deploy front-running remains an accepted residual.** Anyone who learns a `keyId` before deployment could place arbitrary code at the derived address. A signer getter check alone is not proof of ownership, because arbitrary code can answer it however the client expects. `connectWallet` binds accepted code identity before reading signer state for indexer results, derived addresses, primary predictions, and legacy storage rows. Only an explicit secondary association skips the default check. A derivation-resolved address is still not authenticated by that check alone — see the [security analysis](docs/security-deterministic-deployer.md#accepted-residual-address-squatting).
+- **Current code identity is not signer provenance.** The SDK also verifies immutable birth code and address-bound proofs. See the [signer-provenance design](docs/security-signer-provenance-v2.md).
 - **WebAuthn requires User Presence (UP), not User Verification (UV).** The contract requires the UP flag but not UV (biometric/PIN), so it stays compatible with non-UV authenticators. Enforce UV at the client/relayer layer if you need it.
 - **Value-moving policies need a cumulative cap or a co-signer.** A `Signature::Policy` carries no secret, so a per-transfer cap alone is trivially drained by repeated capped transfers. See the [contract interface](#contract-interface) and `sample-policy`.
-- **Existing `binver = 1.0.0` wallets require an authorized upgrade.** Installing the fixed WASM does not change deployed wallet instances. Upgrade each wallet to the canonical `binver = 1.0.1` hash in the current deployment manifest.
+- **Pre-1.1 wallets cannot use this release.** This alpha release has no legacy connection or migration path.
 
 ## Contract interface
 
-The wallet is a Soroban smart contract (`soroban-sdk 27`, `wasm32v1-none`). Every user wallet is a separate instance deployed with a `Signer` constructor argument.
+The wallet is a Soroban smart contract (`soroban-sdk 27`, `wasm32v1-none`). Every user wallet is a separate instance.
 
-**Functions:** `__constructor(signer)` · `add_signer(signer)` · `update_signer(signer)` · `remove_signer(signer_key)` · `upgrade(new_wasm_hash)` · `get_signer(signer_key) -> Option<SignerVal>`. Admin functions require wallet auth (`__check_auth`).
+The v1.1 contract requires passkey proofs in `__constructor` and every later Secp256r1 signer write. See [the signer-provenance design](docs/security-signer-provenance-v2.md) and [deployment manifest](docs/deployments-2026-09-01.md).
+
+**Functions:** `__constructor(signer, proof)` · `add_signer(signer)` · `add_secp256r1(signer, proof)` · `update_signer(signer)` · `remove_signer(signer_key)` · `upgrade(new_wasm_hash)` · `get_signer(signer_key)` · `get_secp256r1_binding(key_id)`.
+
+Wallet administration functions require wallet auth through `__check_auth`.
 
 **Signer kinds:** `Policy(Address)` · `Ed25519(BytesN<32>)` · `Secp256r1(Bytes keyId)`, each with a `SignerExpiration`, `SignerLimits`, and `SignerStorage`.
 
@@ -486,7 +518,7 @@ See [`contracts/smart-wallet-interface/src/`](./contracts/smart-wallet-interface
 
 ### Deterministic derivation
 
-Every wallet address is derived from its passkey credential id (`keyId`) alone — this is what lets `connectWallet` and the indexers resolve a wallet without a lookup table:
+Each new wallet address derives from its constructor passkey credential ID (`keyId`).
 
 ```text
 contractId = sha256(XDR(HashIdPreimage::EnvelopeTypeContractId {
@@ -498,10 +530,11 @@ contractId = sha256(XDR(HashIdPreimage::EnvelopeTypeContractId {
 }))
 ```
 
-- The canonical deployer keypair is `Keypair.fromRawEd25519Seed(sha256("kalepail"))`. It salts the deploy and signs the deploy authorization — it never pays fees and never controls the wallet — but its determinism is **load-bearing**: overriding `deploySource` changes every derived address and breaks keyId → wallet discovery.
+- The canonical deployer uses `Keypair.fromRawEd25519Seed(sha256("kalepail"))`.
+- Overriding `deploySource` changes derived addresses.
 - The WASM hash is deliberately **not** in the preimage, so an `upgrade` never moves a wallet's address.
 
-This tuple is normative and must never change. See [`docs/deployments-2026-08-19.md`](./docs/deployments-2026-08-19.md) for the canonical WASM hash, upload transactions, and upgrade guidance.
+This tuple remains stable for address compatibility. Signer proofs provide ownership evidence; address occupancy does not.
 
 ## Repository layout & development
 
@@ -530,3 +563,7 @@ pnpm verify:bindings  # assert the committed bindings match the canonical WASM
 
 - [Super Peach](https://github.com/kalepail/superpeach) — a real-world implementation example.
 - [Stellar Developers Discord `#passkeys`](https://discord.gg/stellardev) — questions and showcase.
+
+---
+
+> **Note:** This repository is not in scope for the Stellar Development Foundation bug bounty program. Vulnerabilities found in this repo are not eligible for rewards.

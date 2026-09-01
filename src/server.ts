@@ -31,7 +31,7 @@ import {
 } from "./errors.js";
 import { failedTransaction } from "./contract-errors.js";
 import { MercuryIndexer } from "./indexer/index.js";
-import type { WalletSigner } from "./indexer/index.js";
+import type { WalletCandidateLookup, WalletSigner } from "./indexer/index.js";
 import { SignerKey } from "./types.js";
 import type { TransactionResult } from "./types.js";
 
@@ -229,14 +229,17 @@ export class PasskeyServer {
   }
 
   /**
-   * Reverse lookup: find the wallet(s) a signer belongs to via Mercury.
+   * Reverse lookup: wallets a signer belongs to, with birth metadata.
    *
-   * @returns the confirmed address at `index`, or `undefined` if there are none.
+   * Returns the full {@link WalletCandidateLookup}. Completeness and birth
+   * fields pass through from the indexer. Live-signer confirmation does not
+   * prove birth; the caller must verify the creating transaction.
    */
-  async getContractId(
-    options: { keyId?: string; publicKey?: string; policy?: string },
-    index = 0
-  ): Promise<string | undefined> {
+  async getWalletCandidates(options: {
+    keyId?: string;
+    publicKey?: string;
+    policy?: string;
+  }): Promise<WalletCandidateLookup> {
     const provided = [options.keyId, options.publicKey, options.policy].filter(
       Boolean
     );
@@ -252,7 +255,6 @@ export class PasskeyServer {
     else if (options.publicKey) key = SignerKey.Ed25519(options.publicKey);
     else key = SignerKey.Policy(options.policy!);
 
-    const wallets = await this.requireMercury().findWallets(key);
-    return wallets[index];
+    return this.requireMercury().findWallets(key);
   }
 }

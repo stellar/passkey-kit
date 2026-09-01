@@ -39,6 +39,7 @@ export enum PasskeyKitErrorCode {
   WALLET_ALREADY_EXISTS = 2002,
   WALLET_NOT_FOUND = 2003,
   WALLET_OWNERSHIP_MISMATCH = 2004,
+  WALLET_AMBIGUOUS = 2005,
 
   // WebAuthn (3xxx)
   WEBAUTHN_REGISTRATION_FAILED = 3001,
@@ -168,6 +169,22 @@ export class WalletOwnershipError extends PasskeyKitError {
   constructor(message: string, context?: Record<string, unknown>) {
     super(message, PasskeyKitErrorCode.WALLET_OWNERSHIP_MISMATCH, { context });
     this.name = "WalletOwnershipError";
+  }
+}
+
+/** Thrown when more than one verified wallet contains the connecting passkey. */
+export class WalletAmbiguousError extends PasskeyKitError {
+  /** Every candidate that passed the configured wallet checks. */
+  readonly candidates: readonly string[];
+
+  constructor(candidates: readonly string[]) {
+    super(
+      "More than one verified wallet contains the given passkey",
+      PasskeyKitErrorCode.WALLET_AMBIGUOUS,
+      { context: { candidates: [...candidates] } }
+    );
+    this.name = "WalletAmbiguousError";
+    this.candidates = [...candidates];
   }
 }
 

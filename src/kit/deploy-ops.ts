@@ -13,6 +13,7 @@ import { Keypair, hash } from "@stellar/stellar-sdk";
 import type { AssembledTransaction } from "@stellar/stellar-sdk/contract";
 import {
   Client as PasskeyClient,
+  type Secp256r1Signature,
   type Signer as SDKSigner,
 } from "passkey-kit-sdk";
 import { DEFAULT_DEPLOYER_SEED } from "../constants.js";
@@ -70,7 +71,8 @@ export async function buildDeployTransaction(
     timeoutInSeconds: number;
   },
   keyId: Buffer,
-  publicKey: Uint8Array
+  publicKey: Uint8Array,
+  proof: Secp256r1Signature
 ): Promise<AssembledTransaction<PasskeyClient>> {
   const signer: SDKSigner = {
     tag: "Secp256r1",
@@ -84,7 +86,7 @@ export async function buildDeployTransaction(
   };
 
   return PasskeyClient.deploy(
-    { signer },
+    { signer, proof },
     {
       rpcUrl: deps.rpcUrl,
       wasmHash: deps.walletWasmHash,

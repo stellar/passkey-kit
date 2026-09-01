@@ -12,9 +12,9 @@ The versions checked into each `package.json` are authoritative; `npm view` is t
 
 | Package | Checked-in version |
 |---|---|
-| `passkey-kit-sdk` | `0.8.2` |
+| `passkey-kit-sdk` | `0.9.0` |
 | `sac-sdk` | `0.4.4` |
-| `passkey-kit` | `0.16.5` (browser deploy and connection safety fixes — see [CHANGELOG](../CHANGELOG.md)) |
+| `passkey-kit` | `0.17.0` (signer provenance and verified wallet birth — see [CHANGELOG](../CHANGELOG.md)) |
 
 > [!IMPORTANT]
 > Publishing is an **outward-facing, user-gated** step. Bump the versions intentionally, and have the person with npm access run the publish commands (they hold the credentials and the OTP device).
@@ -51,7 +51,7 @@ Then prove the committed bindings match the canonical on-chain WASM:
 pnpm run verify:bindings
 ```
 
-`verify:bindings` (`scripts/bindings/verify.sh`) fetches the smart-wallet WASM by the pinned canonical hash recorded in [`deployments-2026-08-19.md`](./deployments-2026-08-19.md), regenerates to a temp dir, and diffs the ContractSpec base64 (the wasm-determined semantic content, ignoring CLI formatting). It exits nonzero on drift.
+`verify:bindings` (`scripts/bindings/verify.sh`) fetches the smart-wallet WASM by the pinned canonical hash recorded in [`deployments-2026-09-01.md`](./deployments-2026-09-01.md), regenerates to a temp dir, and diffs the ContractSpec base64 (the wasm-determined semantic content, ignoring CLI formatting). It exits nonzero on drift.
 
 > [!WARNING]
 > **Never hand-edit the generated bindings** to resolve drift. Fix it on the contract side, rebuild, re-pin the canonical hash in the deployments manifest, and regenerate. Hand-edits re-introduce drift that `verify:bindings` will flag.
@@ -112,7 +112,7 @@ Use a **fresh** OTP for each publish (codes expire in ~30s). npm package version
 
 Publishing the npm packages does **not** deploy contracts, the indexer, or the workers. Those are separate, gated steps:
 
-- **Contract WASM** and its canonical hash: [`deployments-2026-08-19.md`](./deployments-2026-08-19.md). Every user wallet deploys its own instance. The smart-wallet WASM is not a singleton.
+- **Contract WASM** and its canonical hash: [`deployments-2026-09-01.md`](./deployments-2026-09-01.md). Every user wallet deploys its own instance. The smart-wallet WASM is not a singleton.
 - **Mercury passkey-indexer** — hosted and **keyless**; nothing to deploy. The SDK queries `https://{testnet,mainnet}.mercurydata.app/rest/passkey-indexer`. Mercury indexed the new testnet smoke wallet.
 - **Relayer-proxy worker** (Cloudflare): [`relayer-proxy/README.md`](../relayer-proxy/README.md) (`pnpm deploy` / `pnpm deploy:production`).
 - **Demo** (Cloudflare Pages): root `wrangler.toml`, `pnpm run deploy:demo` / `deploy:demo:prod`.

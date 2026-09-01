@@ -2,6 +2,31 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.17.0 — 2026-09-01
+
+- **Closed accepted-code wallet redirection.** `__constructor` now requires a
+  GENESIS WebAuthn proof bound to the network, wallet address, purpose, and full
+  signer value.
+- **Separated signer proof domains.** `add_secp256r1` requires a distinct ADD
+  proof. Cross-purpose replay and signer-field changes fail.
+- **Verified immutable wallet birth.** The SDK verifies the successful direct
+  `CreateContractV2` transaction through RPC or Horizon history.
+- **Hardened wallet discovery.** The SDK requires a complete, current schema-2
+  indexer response. It rejects derivation-only, stale, incomplete, and ambiguous
+  discovery.
+- **Verified signer provenance.** Connection checks current code, the live
+  signer, the stored binding record, and a fresh WebAuthn assertion.
+- **Made a clean alpha cut.** Pre-release wallets have no legacy bypass,
+  binding migration, or derivation-only connection path.
+- **Preserved deployment geometry.** The release keeps direct
+  `CreateContractV2`, `__constructor`, the shared deployer, and
+  `salt = sha256(keyId)`.
+- **Published the canonical wallet WASM.** Testnet and mainnet now contain
+  `97ce047884106b1c6c3bb40b8973cc48db1c4dad95c9e20462bf2c701daa764e`.
+  See [`docs/deployments-2026-09-01.md`](./docs/deployments-2026-09-01.md).
+- **Regenerated `passkey-kit-sdk@0.9.0`.** The generated bindings match the
+  canonical `binver = 1.1.0` WASM and its proof-bearing constructor.
+
 ## 0.16.5 — 2026-08-19
 
 - **Fixed browser deploy authorization.** Shared-deployer nonce generation now

@@ -1,7 +1,13 @@
 [workspace]
 resolver = "2"
 
-members = ["smart-wallet", "smart-wallet-interface", "example-contract", "sample-policy"]
+members = [
+    "smart-wallet",
+    "smart-wallet-interface",
+    "constructor-integration",
+    "example-contract",
+    "sample-policy",
+]
 
 [workspace.package]
 version = "1.0.0"

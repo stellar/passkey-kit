@@ -7,6 +7,9 @@ function makePasskey(overrides: Partial<StoredPasskey> = {}): StoredPasskey {
     keyId: "key-1",
     publicKey: new Uint8Array([0x04, 1, 2, 3]),
     contractId: "C1",
+    birthWasmHash: "ab".repeat(32),
+    creationTransactionHash: "12".repeat(32),
+    creationLedger: 100,
     createdAt: 1,
     ...overrides,
   };

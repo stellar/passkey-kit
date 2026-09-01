@@ -8,12 +8,16 @@ use p256::ecdsa::{
     signature::hazmat::PrehashSigner, Signature as P256Signature, SigningKey as P256SigningKey,
 };
 use sha2::{Digest, Sha256};
-use smart_wallet_interface::types::{
-    Secp256r1Signature, Signature, Signer, SignerExpiration, SignerKey, SignerLimits, SignerStorage,
+use smart_wallet_interface::{
+    binding::{secp256r1_binding_challenge, secp256r1_binding_payload},
+    types::{
+        BindingPurpose, Secp256r1BindingPayload, Secp256r1Signature, Signature, Signer,
+        SignerExpiration, SignerKey, SignerLimits, SignerStorage,
+    },
 };
 use soroban_sdk::{
     auth::{Context, ContractContext},
-    testutils::EnvTestConfig,
+    testutils::{Address as _, EnvTestConfig},
     xdr::{
         HashIdPreimage, HashIdPreimageSorobanAuthorization, InvokeContractArgs, Limits, ScVal,
         SorobanAuthorizedFunction, SorobanAuthorizedInvocation, ToXdr, VecM, WriteXdr,
@@ -33,11 +37,86 @@ pub fn test_env() -> Env {
     env
 }
 
+/// Register a wallet with an Ed25519 or Policy first signer (no binding
+/// proof). For a passkey first signer use `register_passkey_wallet`.
 pub fn register_wallet<'a>(env: &Env, signer: &Signer) -> (Address, ContractClient<'a>) {
-    let address = env.register(Contract, (signer.clone(),));
+    let address = env.register(Contract, (signer.clone(), None::<Secp256r1Signature>));
     let client = ContractClient::new(env, &address);
 
     (address, client)
+}
+
+/// Register a wallet whose FIRST signer is a passkey. The binding proof
+/// commits to the wallet address, so the address is generated up front and
+/// the contract is registered at it.
+pub fn register_passkey_wallet<'a>(
+    env: &Env,
+    passkey: &Passkey,
+    expiration: SignerExpiration,
+    limits: SignerLimits,
+    storage: SignerStorage,
+) -> (Address, ContractClient<'a>) {
+    let address = Address::generate(env);
+    let signer = passkey.signer(env, expiration, limits, storage);
+    let proof = passkey.genesis_proof(env, &address, &signer);
+
+    env.register_at(&address, Contract, (signer, Some(proof)));
+    let client = ContractClient::new(env, &address);
+
+    (address, client)
+}
+
+/// Seed for the Ed25519 admin that satisfies the constructor's durable-admin
+/// requirement in wallets whose SUBJECT signer is deliberately not an admin.
+/// Chosen far from the per-test seeds so it never collides.
+pub const GENESIS_ADMIN_SEED: u8 = 200;
+
+pub fn genesis_admin() -> Ed25519Signer {
+    Ed25519Signer::new(GENESIS_ADMIN_SEED)
+}
+
+/// Register a wallet whose subject signer is NOT admin-capable.
+///
+/// `__constructor` requires a durable ADMIN first signer, so a wallet holding
+/// only a limited, co-signer-gated, expiring, or Temporary signer cannot be
+/// born. Such a wallet is built in two steps instead: an unlimited Ed25519
+/// admin at genesis, then `signer` added under wallet auth.
+///
+/// The genesis admin never appears in the signature maps these tests build, so
+/// it does not change what they assert about `signer`.
+pub fn register_wallet_with<'a>(env: &Env, signer: &Signer) -> (Address, ContractClient<'a>) {
+    let admin = genesis_admin();
+    let (wallet, client) = register_wallet(
+        env,
+        &admin.signer(
+            env,
+            SignerExpiration(None),
+            SignerLimits(None),
+            SignerStorage::Persistent,
+        ),
+    );
+
+    match signer {
+        Signer::Secp256r1(key_id, ..) => {
+            let passkey = Passkey::from_key_id(key_id);
+            client
+                .mock_all_auths()
+                .add_secp256r1(signer, &passkey.add_proof(env, &wallet, signer));
+        }
+        _ => {
+            client.mock_all_auths().add_signer(signer);
+        }
+    }
+
+    (wallet, client)
+}
+
+/// Unwrap the WebAuthn assertion out of a `Signature::Secp256r1`.
+pub fn secp256r1_signature(signature: Signature) -> Secp256r1Signature {
+    match signature {
+        Signature::Secp256r1(signature) => signature,
+        _ => panic!("expected a Secp256r1 signature"),
+    }
 }
 
 // --- Ed25519 -----------------------------------------------------------
@@ -140,6 +219,13 @@ impl Passkey {
         }
     }
 
+    /// Recover the deterministic passkey behind a seeded credential id.
+    /// Every `Passkey::new(seed)` uses `[seed; 20]`, so the first byte is the
+    /// seed.
+    pub fn from_key_id(key_id: &Bytes) -> Self {
+        Self::new(key_id.get(0).expect("a non-empty credential id"))
+    }
+
     pub fn key_id(&self, env: &Env) -> Bytes {
         Bytes::from_slice(env, &self.key_id)
     }
@@ -170,6 +256,58 @@ impl Passkey {
 
     pub fn sign(&self, env: &Env, payload: &BytesN<32>) -> Signature {
         self.sign_with(env, payload, WebAuthnOptions::default())
+    }
+
+    /// A correct GENESIS proof for `signer` on `wallet`.
+    pub fn genesis_proof(
+        &self,
+        env: &Env,
+        wallet: &Address,
+        signer: &Signer,
+    ) -> Secp256r1Signature {
+        self.binding_proof(env, wallet, &BindingPurpose::Genesis, signer)
+    }
+
+    /// A correct ADD proof for `signer` on `wallet`.
+    pub fn add_proof(&self, env: &Env, wallet: &Address, signer: &Signer) -> Secp256r1Signature {
+        self.binding_proof(env, wallet, &BindingPurpose::Add, signer)
+    }
+
+    /// A correct binding proof for THIS passkey: current network, the wallet
+    /// address, the purpose, and the complete signer value.
+    pub fn binding_proof(
+        &self,
+        env: &Env,
+        wallet: &Address,
+        purpose: &BindingPurpose,
+        signer: &Signer,
+    ) -> Secp256r1Signature {
+        let payload = secp256r1_binding_payload(env, wallet, purpose, signer);
+
+        self.binding_proof_for(env, &payload)
+    }
+
+    /// An unlimited, persistent, non-expiring signer — the admin shape the
+    /// constructor requires.
+    pub fn admin_signer(&self, env: &Env) -> Signer {
+        self.signer(
+            env,
+            SignerExpiration(None),
+            SignerLimits(None),
+            SignerStorage::Persistent,
+        )
+    }
+
+    /// A binding proof over an ARBITRARY payload, for the negative vectors
+    /// (wrong network, wrong address, wrong public key).
+    pub fn binding_proof_for(
+        &self,
+        env: &Env,
+        payload: &Secp256r1BindingPayload,
+    ) -> Secp256r1Signature {
+        let challenge = secp256r1_binding_challenge(env, payload).to_bytes();
+
+        secp256r1_signature(self.sign(env, &challenge))
     }
 
     /// Build a WebAuthn assertion over `payload`, shaped like real
@@ -302,15 +440,11 @@ pub fn transfer_invocation(
 ) -> SorobanAuthorizedInvocation {
     SorobanAuthorizedInvocation {
         function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
-            contract_address: token.clone().try_into().unwrap(),
+            contract_address: token.clone().into(),
             function_name: "transfer".try_into().unwrap(),
-            args: std::vec![
-                from.clone().try_into().unwrap(),
-                to.clone().try_into().unwrap(),
-                amount.try_into().unwrap(),
-            ]
-            .try_into()
-            .unwrap(),
+            args: std::vec![from.clone().into(), to.clone().into(), amount.into(),]
+                .try_into()
+                .unwrap(),
         }),
         sub_invocations: VecM::default(),
     }
@@ -328,7 +462,7 @@ pub fn remove_signer_invocation(
 
     SorobanAuthorizedInvocation {
         function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
-            contract_address: wallet.clone().try_into().unwrap(),
+            contract_address: wallet.clone().into(),
             function_name: "remove_signer".try_into().unwrap(),
             args: std::vec![key_scval].try_into().unwrap(),
         }),

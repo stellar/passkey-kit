@@ -16,7 +16,11 @@ import type {
   AssembledTransaction,
   Spec as ContractSpec,
 } from "@stellar/stellar-sdk/contract";
-import type { Client as PasskeyClient, SignerVal } from "passkey-kit-sdk";
+import type {
+  Client as PasskeyClient,
+  Secp256r1Signature,
+  SignerVal,
+} from "passkey-kit-sdk";
 import type { Signer, SignerContext } from "../signers.js";
 import { PasskeySigner } from "../signers.js";
 import {
@@ -33,6 +37,7 @@ import {
 } from "../kit/tx-ops.js";
 import {
   buildEd25519SignerTx,
+  buildAddSecp256r1SignerTx,
   buildPolicySignerTx,
   type PolicySignerTxOptions,
   buildRemoveSignerTx,
@@ -116,9 +121,18 @@ export class SignerManager {
     publicKey: string | Uint8Array,
     limits: SignerLimits,
     store: SignerStore,
+    proof: Secp256r1Signature,
     expiration?: number
   ): Promise<WalletTx> {
-    return buildSecp256r1SignerTx(this.writeDeps(), "add_signer", keyId, publicKey, limits, store, expiration);
+    return buildAddSecp256r1SignerTx(
+      this.writeDeps(),
+      keyId,
+      publicKey,
+      limits,
+      store,
+      proof,
+      expiration
+    );
   }
 
   /**
