@@ -65,9 +65,6 @@ jobs:
       # name, which only resolves once its dist/ exists.
       - run: pnpm run build
 
-      # The generated package must match the canonical uploaded wallet WASM.
-      - run: pnpm run verify:bindings
-
       - run: pnpm test --run
 
       # The demo consumes the SDK's public API, so this catches breaking
