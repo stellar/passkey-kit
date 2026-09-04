@@ -2,6 +2,23 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.17.2 — 2026-09-04
+
+- **Refused wallet-admin authority on the generic `sign()` path.** `signAuthEntry`
+  now walks the entry root plus every sub-invocation and refuses wallet-admin
+  calls (`add_signer`, `add_secp256r1`, `update_signer`, `remove_signer`,
+  `upgrade`) and contract-deploy authority unless the caller passes
+  `allowWalletReentry: true`. This closes both the grafted sub-invocation shape
+  and the hostile-root shape of the reported auth-tree smuggling finding.
+- **Pinned admin roots to the transaction envelope.** `sign()` additionally
+  requires each wallet-admin entry root to XDR-equal the transaction's own
+  top-level host function, so `signAdmin()` is self-validating. New
+  `PasskeyKit.signAdmin()` / `SignerManager.signAdmin()` declare that intent
+  for the dedicated builders; the demo and README admin examples use it.
+  Generic dApp `sign()` calls stay fail-closed.
+- **Kept the contract unchanged.** No contract changes; same smart-wallet WASM,
+  `passkey-kit-sdk@0.9.0`, and `sac-sdk@0.4.4` as `0.17.1`.
+
 ## 0.17.1 — 2026-09-01
 
 - **Prepared additive schema-2 rollout.** `MercuryIndexer` prefers the new
