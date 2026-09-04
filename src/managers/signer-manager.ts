@@ -88,6 +88,7 @@ export class SignerManager {
       spec: this.requireWallet().spec,
       signerContext: this.deps.getSignerContext(),
       calculateExpiration: this.deps.calculateExpiration,
+      contractId: this.deps.getContractId(),
     };
   }
 
@@ -100,7 +101,16 @@ export class SignerManager {
     return signAuthEntryOp(this.signAuthEntryDeps(), entry, signer, options);
   }
 
-  /** Sign an assembled transaction's wallet auth entries. */
+  /**
+   * Sign an assembled transaction's wallet auth entries.
+   *
+   * Wallet-admin entries (the transaction's own `add_signer` /
+   * `add_secp256r1` / `update_signer` / `remove_signer` / `upgrade` produced
+   * by the dedicated builders below) must explicitly opt in with
+   * `options.allowWalletReentry: true`. Generic dApp `sign()` calls leave the
+   * default `false`, so a hostile transaction rooting an entry at a
+   * wallet-admin call is refused.
+   */
   sign<T>(
     txn: AssembledTransaction<T>,
     signer: Signer = new PasskeySigner(),
@@ -112,6 +122,19 @@ export class SignerManager {
       signer,
       options
     );
+  }
+
+  /**
+   * Sign a wallet-admin transaction built by one of the dedicated builders
+   * below. Declares the wallet-reentry intent the generic `sign()` path
+   * refuses by default.
+   */
+  signAdmin<T>(
+    txn: AssembledTransaction<T>,
+    signer: Signer = new PasskeySigner(),
+    options?: Omit<SignOptions, "allowWalletReentry">
+  ): Promise<AssembledTransaction<T>> {
+    return this.sign(txn, signer, { ...options, allowWalletReentry: true });
   }
 
   // -- Signer writes -----------------------------------------------------------

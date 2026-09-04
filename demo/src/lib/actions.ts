@@ -561,7 +561,7 @@ export function ensureEd25519(): Keypair {
 // -- Helpers ------------------------------------------------------------------
 
 async function signAndSubmit(label: string, at: WalletWriteTx): Promise<boolean> {
-  const signed = await account.sign(at, adminSigner());
+  const signed = await account.signAdmin(at, adminSigner());
   return reportResult(label, await submit(signed));
 }
 

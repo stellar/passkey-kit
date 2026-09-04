@@ -847,6 +847,20 @@ export class PasskeyKit {
     return this.signerManager.sign(txn, signer, options);
   }
 
+  /**
+   * Sign a wallet-admin transaction produced by the dedicated builders
+   * (`addSecp256r1`, `addEd25519`, `addPolicy`, `update*`, `remove`,
+   * `upgrade`). Declares the wallet-reentry intent the generic `sign()` path
+   * refuses by default.
+   */
+  signAdmin<T>(
+    txn: AssembledTransaction<T>,
+    signer?: Signer,
+    options?: Omit<SignOptions, "allowWalletReentry">
+  ): Promise<AssembledTransaction<T>> {
+    return this.signerManager.signAdmin(txn, signer, options);
+  }
+
   // -- Signer management -------------------------------------------------------
 
   async addSecp256r1(
