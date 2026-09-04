@@ -16,7 +16,7 @@
  * @packageDocumentation
  */
 
-import { Operation, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import { Address, Operation, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import type { Keypair } from "@stellar/stellar-sdk";
 import type { Server } from "@stellar/stellar-sdk/rpc";
 import type {
@@ -57,12 +57,127 @@ export interface SignAuthEntryDeps {
   spec: ContractSpec;
   signerContext: SignerContext;
   calculateExpiration: () => Promise<number>;
+  /** Connected wallet contract id. Required to refuse nested wallet-admin calls. */
+  contractId?: string;
 }
 
 /** Per-call signing options. */
 export interface SignOptions {
   /** Signature expiration ledger (defaults to the configured window). */
   expiration?: number;
+  /**
+   * Allow this entry to authorize nested calls back into the connected wallet
+   * (e.g. `add_signer`, `update_signer`, `remove_signer`, `upgrade`,
+   * `add_secp256r1`). Default `false`. Wallet-admin writes must use the
+   * dedicated builders (`addEd25519`, `addSecp256r1`, `addPolicy`, `remove`,
+   * `upgrade`), never a generic dApp `sign()` call.
+   */
+  allowWalletReentry?: boolean;
+}
+
+/**
+ * Function names that administer the wallet itself. A nested call into the
+ * connected wallet carrying one of these names changes who can authorize on
+ * behalf of the wallet, so it must never ride inside a generic dApp signature.
+ */
+const WALLET_ADMIN_FUNCTIONS = new Set([
+  "add_signer",
+  "add_secp256r1",
+  "update_signer",
+  "remove_signer",
+  "upgrade",
+]);
+
+/** Describe one authorized invocation as `CONTRACT.fn` for error context. */
+function describeWalletInvocation(inv: xdr.SorobanAuthorizedInvocation): string {
+  const fn = inv.function();
+  if (fn.switch().name !== "sorobanAuthorizedFunctionTypeContractFn") {
+    return fn.switch().name;
+  }
+  const args = fn.contractFn();
+  return `${Address.fromScAddress(args.contractAddress()).toString()}.${args.functionName().toString()}`;
+}
+
+/**
+ * Refuse any wallet-admin use covered by this signature — the entry root
+ * itself or any nested sub-invocation. A signature covers the whole
+ * authorization tree, so both shapes are the same grant:
+ *
+ * - Shape A (graft): dApp root (e.g. `evil.claim`) with a nested
+ *   `wallet.add_signer(attacker)` sub-invocation.
+ * - Shape B (hostile root): the transaction's top-level call IS
+ *   `wallet.add_signer(attacker)` (or `add_secp256r1` / `update_signer` /
+ *   `remove_signer` / `upgrade`), built by a hostile dApp and handed to
+ *   generic `sign()`. The auth-entry root is the admin call itself, so a
+ *   sub-invocation-only check signs it clean.
+ *
+ * Legit wallet-admin writes build the admin call as the transaction's own
+ * host function through the dedicated builders (`addEd25519`,
+ * `addSecp256r1`, `addPolicy`, `remove`, `upgrade`). They pass
+ * `allowWalletReentry: true` at sign time to declare that intent. A generic
+ * dApp `sign()` call must never carry wallet-admin authority, root or nested.
+ *
+ * @throws {SigningError} If wallet-admin authority is found and not allowed.
+ */
+export function assertNoWalletAdminReentry(
+  entry: xdr.SorobanAuthorizationEntry,
+  contractId: string | undefined,
+  allowWalletReentry: boolean
+): void {
+  if (allowWalletReentry) {
+    return;
+  }
+  // The credential address is authoritative for which wallet this signature
+  // speaks for; `contractId` is the connected wallet. Check the entry against
+  // both so a multi-wallet signer cannot be confused into signing wallet B's
+  // admin call while connected to wallet A (or vice versa).
+  const walletIds = new Set<string>();
+  try {
+    const credAddr = Address.fromScAddress(
+      getAddressCredentials(entry.credentials()).address()
+    ).toString();
+    walletIds.add(credAddr);
+  } catch {
+    // Non-address credentials are rejected by the caller before this runs.
+  }
+  if (contractId) {
+    walletIds.add(contractId);
+  }
+  const walk = (inv: xdr.SorobanAuthorizedInvocation): void => {
+    const fn = inv.function();
+    const switchName = fn.switch().name;
+    // Wallet credentials must never authorize deploys on the generic path:
+    // deploys use the dedicated `signDeploy` flow, and an unlimited signer
+    // authorizes `CreateContract*` contexts on-chain.
+    if (
+      switchName === "sorobanAuthorizedFunctionTypeCreateContractV2HostFn" ||
+      switchName === "sorobanAuthorizedFunctionTypeCreateContractHostFn"
+    ) {
+      throw new SigningError(
+        `Refusing to sign contract-deploy authority on the generic sign() path. Deploys must use the dedicated deploy flow.`,
+        PasskeyKitErrorCode.SIGNING_FAILED,
+        { contractId }
+      );
+    }
+    if (switchName === "sorobanAuthorizedFunctionTypeContractFn") {
+      const args = fn.contractFn();
+      const target = Address.fromScAddress(args.contractAddress()).toString();
+      const name = args.functionName().toString();
+      if (walletIds.has(target) && WALLET_ADMIN_FUNCTIONS.has(name)) {
+        throw new SigningError(
+          `Refusing to sign wallet-admin call on the generic sign() path: ${describeWalletInvocation(inv)}. Wallet-admin writes must use the dedicated builders with allowWalletReentry: true, never a generic dApp sign() call.`,
+          PasskeyKitErrorCode.SIGNING_FAILED,
+          { contractId: target, function: name }
+        );
+      }
+    }
+    for (const sub of inv.subInvocations()) {
+      walk(sub);
+    }
+  };
+  // Walk the ROOT as well as every sub-invocation: Shape B roots the entry
+  // at the admin call itself.
+  walk(entry.rootInvocation());
 }
 
 /**
@@ -102,6 +217,13 @@ export async function signAuthEntry(
 
   const credentials = getAddressCredentials(entry.credentials());
 
+  // A signature covers the whole authorization tree, not just the root. Refuse
+  // wallet-admin authority on the generic signing path before anything is
+  // hashed: a hostile contract grafts `add_signer(attacker)` beneath an honest
+  // root (Shape A) or roots the entry at the admin call itself (Shape B), and
+  // one tap would otherwise install a permanent attacker signer.
+  assertNoWalletAdminReentry(entry, deps.contractId, options?.allowWalletReentry ?? false);
+
   // `== null`, not `!expiration`: an explicit `expiration: 0` is a caller-chosen
   // value, not "unset" — only undefined/null falls through to the entry's
   // existing ledger or a freshly computed default.
@@ -130,9 +252,69 @@ export interface SignTxDeps extends SignAuthEntryDeps {
 }
 
 /**
+ * Pin each wallet-admin entry root to the transaction's own top-level host
+ * function. The dedicated builders produce exactly this shape: the transaction
+ * invokes `wallet.<admin-fn>` and the single auth entry roots at that same
+ * call. A hostile dApp handing over a pre-built admin transaction cannot forge
+ * the caller's envelope, so a mismatch is refused even when the caller opted
+ * into `allowWalletReentry` (making `signAdmin` self-validating instead of a
+ * full bypass on misuse).
+ *
+ * Non-admin roots (dApp calls such as token transfers) pass through: the
+ * per-entry tree check already refused nested wallet-admin authority.
+ *
+ * @throws {SigningError} If a wallet-admin root does not match the top-level call.
+ */
+export function assertAdminRootMatchesHostFunction(
+  entry: xdr.SorobanAuthorizationEntry,
+  contractId: string,
+  hostFunc: xdr.HostFunction
+): void {
+  const rootFn = entry.rootInvocation().function();
+  if (rootFn.switch().name !== "sorobanAuthorizedFunctionTypeContractFn") {
+    return;
+  }
+  const args = rootFn.contractFn();
+  const target = Address.fromScAddress(args.contractAddress()).toString();
+  const name = args.functionName().toString();
+  const isWalletAdmin = target === contractId && WALLET_ADMIN_FUNCTIONS.has(name);
+  if (!isWalletAdmin) {
+    return;
+  }
+  if (hostFunc.switch().name !== "hostFunctionTypeInvokeContract") {
+    throw new SigningError(
+      `Refusing wallet-admin entry whose transaction is not an invokeContract call: ${describeWalletInvocation(entry.rootInvocation())}.`,
+      PasskeyKitErrorCode.SIGNING_FAILED,
+      { contractId, function: name }
+    );
+  }
+  const invoke = hostFunc.invokeContract();
+  if (
+    Address.fromScAddress(invoke.contractAddress()).toString() !== target ||
+    invoke.functionName().toString() !== name ||
+    !Buffer.from(args.toXDR()).equals(Buffer.from(invoke.toXDR()))
+  ) {
+    throw new SigningError(
+      `Refusing wallet-admin entry that does not match the transaction's top-level call: ${describeWalletInvocation(entry.rootInvocation())}. Sign wallet-admin transactions only through the dedicated builders.`,
+      PasskeyKitErrorCode.SIGNING_FAILED,
+      { contractId, function: name }
+    );
+  }
+}
+
+/**
  * Sign every auth entry of an {@link AssembledTransaction} that is authorized by
  * the connected wallet, using `signer`. Returns the same transaction with its
  * auth entries signed.
+ *
+ * Generic dApp `sign()` calls must never carry wallet-admin authority. Standalone
+ * `signAuthEntry()` has no transaction context, so a wallet-admin entry root is
+ * necessarily hostile there (dedicated builders are the only legit producers of
+ * admin roots, and they sign through this path with `allowWalletReentry: true`).
+ * This function additionally pins each wallet-admin entry root to the
+ * transaction's own top-level host function: the dedicated builders produce
+ * exactly that shape, while a hostile dApp handing over a pre-built admin
+ * transaction cannot forge the transaction envelope the caller already holds.
  *
  * @throws {SigningError} If no wallet is connected.
  */
@@ -150,10 +332,26 @@ export async function sign<T>(
     );
   }
 
+  const allowWalletReentry = options?.allowWalletReentry ?? false;
+  // The wallet-admin pin needs the transaction's own top-level host function.
+  // `signAuthEntries` only hands each entry to the callback, so read the
+  // envelope here where the full transaction is in hand; entries are matched
+  // back to it per-entry below. A missing envelope is left for the SDK's own
+  // "not simulated" error inside `signAuthEntries`.
+  const built = (txn as { built?: AssembledTransaction<T>["built"] }).built;
+  const topOp = built?.operations[0];
+  const topFunc =
+    topOp?.type === "invokeHostFunction"
+      ? (topOp as Operation.InvokeHostFunction).func
+      : undefined;
+
   await txn.signAuthEntries({
     address: contractId,
     authorizeEntry: async (entry) => {
       const clone = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
+      if (allowWalletReentry && topFunc) {
+        assertAdminRootMatchesHostFunction(clone, contractId, topFunc);
+      }
       return signAuthEntry(deps, clone, signer, options);
     },
   });

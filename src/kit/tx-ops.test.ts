@@ -92,6 +92,41 @@ function makeDeps(): SignAuthEntryDeps {
   };
 }
 
+function walletInvocation(
+  contract: string,
+  name: string,
+  subs: xdr.SorobanAuthorizedInvocation[]
+): xdr.SorobanAuthorizedInvocation {
+  return new xdr.SorobanAuthorizedInvocation({
+    function:
+      xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+        new xdr.InvokeContractArgs({
+          contractAddress: Address.fromString(contract).toScAddress(),
+          functionName: name,
+          args: [],
+        })
+      ),
+    subInvocations: subs,
+  });
+}
+
+function entryWithRoot(
+  wallet: string,
+  root: xdr.SorobanAuthorizedInvocation
+): xdr.SorobanAuthorizationEntry {
+  return new xdr.SorobanAuthorizationEntry({
+    credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
+      new xdr.SorobanAddressCredentials({
+        address: Address.fromString(wallet).toScAddress(),
+        nonce: xdr.Int64.fromString("42"),
+        signatureExpirationLedger: 0,
+        signature: xdr.ScVal.scvVoid(),
+      })
+    ),
+    rootInvocation: root,
+  });
+}
+
 describe("signAuthEntry V2 address binding", () => {
   it("upgrades a V1 address entry to V2 credentials before signing", async () => {
     const entry = makeV1Entry(WALLET_A);
@@ -219,5 +254,95 @@ describe("signAuthEntry V2 address binding", () => {
     await expect(
       signAuthEntry(makeDeps(), sourceAccount, capturingSigner([]))
     ).rejects.toBeInstanceOf(SigningError);
+  });
+
+  it("refuses a smuggled add_signer nested under an honest dApp root", async () => {
+    const smuggled = walletInvocation(WALLET_A, "add_signer", []);
+    const root = walletInvocation("CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC", "claim", [smuggled]);
+    const entry = entryWithRoot(WALLET_A, root);
+
+    await expect(
+      signAuthEntry(makeDeps(), entry, capturingSigner([]), { expiration: 123 })
+    ).rejects.toBeInstanceOf(SigningError);
+  });
+
+  it("refuses a hostile root at wallet.add_signer itself (Shape B)", async () => {
+    const entry = entryWithRoot(WALLET_A, walletInvocation(WALLET_A, "add_signer", []));
+    await expect(
+      signAuthEntry(makeDeps(), entry, capturingSigner([]), { expiration: 123 })
+    ).rejects.toBeInstanceOf(SigningError);
+  });
+
+  it("refuses a hostile root at wallet.add_secp256r1 and wallet.upgrade", async () => {
+    for (const name of ["add_secp256r1", "upgrade"]) {
+      const entry = entryWithRoot(WALLET_A, walletInvocation(WALLET_A, name, []));
+      await expect(
+        signAuthEntry(makeDeps(), entry, capturingSigner([]), { expiration: 123 })
+      ).rejects.toBeInstanceOf(SigningError);
+    }
+  });
+
+  it("refuses a deeply nested wallet-admin call (depth 2)", async () => {
+    const inner = walletInvocation(WALLET_A, "update_signer", []);
+    const middle = walletInvocation(
+      "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "middle",
+      [inner]
+    );
+    const root = walletInvocation(
+      "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "claim",
+      [middle]
+    );
+    const entry = entryWithRoot(WALLET_A, root);
+    await expect(
+      signAuthEntry(makeDeps(), entry, capturingSigner([]), { expiration: 123 })
+    ).rejects.toBeInstanceOf(SigningError);
+  });
+
+  it("refuses contract-deploy authority on the generic path", async () => {
+    const deployRoot = new xdr.SorobanAuthorizedInvocation({
+      function:
+        xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
+          new xdr.CreateContractArgsV2({
+            executable: xdr.ContractExecutable.contractExecutableWasm(
+              Buffer.alloc(32, 1)
+            ),
+            contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+              new xdr.ContractIdPreimageFromAddress({
+                address: Address.fromString(WALLET_A).toScAddress(),
+                salt: hash(Buffer.from("salt")),
+              })
+            ),
+            constructorArgs: [],
+          })
+        ),
+      subInvocations: [],
+    });
+    const entry = entryWithRoot(WALLET_A, deployRoot);
+    await expect(
+      signAuthEntry(makeDeps(), entry, capturingSigner([]), { expiration: 123 })
+    ).rejects.toBeInstanceOf(SigningError);
+  });
+
+  it("allows wallet-admin authority with allowWalletReentry: true", async () => {
+    const entry = entryWithRoot(WALLET_A, walletInvocation(WALLET_A, "add_signer", []));
+    const payloads: Buffer[] = [];
+    const signed = await signAuthEntry(makeDeps(), entry, capturingSigner(payloads), {
+      expiration: 123,
+      allowWalletReentry: true,
+    });
+    expect(payloads).toHaveLength(1);
+    expect(signed.credentials().switch().name).toBe("sorobanCredentialsAddressV2");
+  });
+
+  it("still signs a benign tree with no nested wallet-admin call", async () => {
+    const entry = makeV1Entry(WALLET_A);
+    const payloads: Buffer[] = [];
+    const signed = await signAuthEntry(makeDeps(), entry, capturingSigner(payloads), {
+      expiration: 123,
+    });
+    expect(payloads).toHaveLength(1);
+    expect(signed.credentials().switch().name).toBe("sorobanCredentialsAddressV2");
   });
 });

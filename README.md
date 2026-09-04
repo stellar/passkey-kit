@@ -277,14 +277,21 @@ import { SignerStore, SignerKey } from "passkey-kit";
 
 // Add an unlimited Ed25519 co-signer, stored persistently.
 const tx = await kit.addEd25519("G…", undefined, SignerStore.Persistent);
-await kit.sign(tx);                 // authorize with the connected passkey
+await kit.signAdmin(tx);          // wallet-admin write: declares reentry intent
 await server.send(tx);
 
 // Remove it.
 const rm = await kit.remove(SignerKey.Ed25519("G…"));
-await kit.sign(rm);
+await kit.signAdmin(rm);
 await server.send(rm);
 ```
+
+Generic dApp calls (transfers, swaps, mints) keep using `kit.sign(tx)`: it
+refuses any wallet-admin call (`add_signer`, `add_secp256r1`, `update_signer`,
+`remove_signer`, `upgrade`) at the entry root or nested beneath it. The only
+legit exception is a nested self-`remove_signer` (the contract lets a limited
+signer remove itself); pass `allowWalletReentry: true` — or `kit.signAdmin(tx)`
+for full admin transactions — to declare that intent.
 
 ## `PasskeyServer` (server)
 
