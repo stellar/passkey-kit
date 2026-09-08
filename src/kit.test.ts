@@ -179,8 +179,11 @@ function instanceWithWasm(hashHex: string) {
   };
 }
 
-function liveSignerVal() {
-  return { tag: "Secp256r1", values: [PUBLIC_KEY, [undefined], [undefined]] };
+function liveSignerVal(expiration?: bigint) {
+  return {
+    tag: "Secp256r1",
+    values: [PUBLIC_KEY, [expiration], [undefined]],
+  };
 }
 
 /** Wire the current-code, live-signer, and provenance stubs a passing candidate needs. */
@@ -326,7 +329,9 @@ describe("connectWallet discovery", () => {
     const kit = makeKit();
     stubProvenance(kit);
     vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
-    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(txStub([birth]) as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(
+      txStub([birth]) as never
+    );
 
     const result = await kit.connectWallet({
       keyId: KEY_ID_B64,
@@ -360,7 +365,7 @@ describe("connectWallet discovery", () => {
   });
 
   it("requires the birth transaction to be RPC-verified (not found fails closed)", async () => {
-    const kit = makeKit();
+    const kit = makeKit(undefined, { horizonUrl: "" });
     stubProvenance(kit);
     vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
     vi.spyOn(kit.rpc, "getTransaction").mockResolvedValue({
@@ -390,11 +395,81 @@ describe("connectWallet discovery", () => {
     const kit = makeKit();
     stubProvenance(kit, { liveSigner: null });
     vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
-    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(txStub([birth]) as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(
+      txStub([birth]) as never
+    );
 
     await expect(
       kit.connectWallet({ keyId: KEY_ID_B64, getWalletCandidates: async () => completeLookup([birth], 45) })
     ).rejects.toBeInstanceOf(WalletOwnershipError);
+  });
+
+  it("rejects a stored signer after its UNIX expiration", async () => {
+    const storage = new MemoryStorage();
+    await storage.save(storedPasskeyFrom(birth));
+    const kit = makeKit(storage);
+    stubProvenance(kit, { liveSigner: liveSignerVal(1_000n) });
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({
+      sequence: 41,
+      closeTime: "1001",
+    } as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(
+      txStub([birth]) as never
+    );
+
+    const error = await kit
+      .connectWallet({ keyId: KEY_ID_B64 })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(WalletOwnershipError);
+    expect((error as WalletOwnershipError).context).toMatchObject({
+      expiration: "1000",
+      latestLedgerTimestamp: "1001",
+    });
+    expect(kit.contractId).toBeUndefined();
+  });
+
+  it("accepts a stored signer at its inclusive UNIX expiration", async () => {
+    const storage = new MemoryStorage();
+    await storage.save(storedPasskeyFrom(birth));
+    const kit = makeKit(storage);
+    stubProvenance(kit, { liveSigner: liveSignerVal(1_000n) });
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({
+      sequence: 41,
+      closeTime: "1000",
+    } as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(
+      txStub([birth]) as never
+    );
+
+    const result = await kit.connectWallet({ keyId: KEY_ID_B64 });
+
+    expect(result.contractId).toBe(birth.contractId);
+    expect(kit.contractId).toBe(birth.contractId);
+  });
+
+  it("rejects an invalid latest-ledger close timestamp", async () => {
+    const storage = new MemoryStorage();
+    await storage.save(storedPasskeyFrom(birth));
+    const kit = makeKit(storage);
+    stubProvenance(kit, { liveSigner: liveSignerVal(1_000n) });
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({
+      sequence: 41,
+      closeTime: "invalid",
+    } as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(
+      txStub([birth]) as never
+    );
+
+    const error = await kit
+      .connectWallet({ keyId: KEY_ID_B64 })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(WalletOwnershipError);
+    expect((error as WalletOwnershipError).context).toMatchObject({
+      closeTime: "invalid",
+    });
+    expect(kit.contractId).toBeUndefined();
   });
 
   it("raises WalletAmbiguousError when two candidates both fully verify", async () => {

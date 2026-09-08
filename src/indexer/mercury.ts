@@ -12,7 +12,7 @@
  *   `https://{testnet,mainnet}.mercurydata.app/rest/passkey-indexer`
  *     GET /                              -> `{ service, status }` health
  *     GET /api/wallet/:contractId        -> signers (this backend's getSigners)
- *     GET /api/lookup/:credentialId      -> wallets by passkey keyId (hex)
+ *     GET /api/v2/lookup/:credentialId   -> wallets by passkey keyId (hex)
  *     GET /api/lookup/address/:address   -> wallets by ed25519 (G…) / policy (C…)
  *     GET /api/stats                     -> indexer statistics
  *
@@ -21,7 +21,7 @@
  * @packageDocumentation
  */
 
-import { Networks } from "@stellar/stellar-sdk";
+import { Networks, StrKey } from "@stellar/stellar-sdk";
 import { Durability, type Server } from "@stellar/stellar-sdk/rpc";
 import { SignerKey, type SignerLimits } from "../types.js";
 import { IndexerError, PasskeyKitErrorCode } from "../errors.js";
@@ -38,7 +38,9 @@ import type {
   IndexerHealth,
   SignerIndexer,
   WalletCandidate,
+  WalletCandidateIncompleteReason,
   WalletCandidateLookup,
+  WalletLookupIncompleteReason,
   WalletSigner,
 } from "./types.js";
 import { signerKeyToContractScVal, walletSpec } from "./codec.js";
@@ -94,6 +96,62 @@ interface PasskeyIndexerWalletResponse {
   signers: PasskeyIndexerSignerJson[];
 }
 
+/** Frozen Mercury credential-lookup v2 signer fields. */
+type PasskeyIndexerV2SignerJson = {
+  publicKey: string;
+  storage: "persistent" | "temporary";
+  status: "live";
+  rpcConfirmed: true;
+} &
+  (
+    | { expiration: null; expiration_unit: null }
+    | { expiration: number; expiration_unit: "unix" | "ledger" }
+  );
+
+interface PasskeyIndexerV2CandidateBase {
+  contractId: string;
+  birthWasmHash: string;
+  creationTransactionHash: string;
+  creationLedger: number;
+  currentWasmHash: string;
+  generation: "legacy" | "v1";
+  derivedAddress: boolean;
+  collision: boolean;
+  signer: PasskeyIndexerV2SignerJson;
+}
+
+type PasskeyIndexerV2Candidate =
+  | (PasskeyIndexerV2CandidateBase & {
+      incomplete: false;
+      incompleteReasons?: never;
+    })
+  | (Partial<PasskeyIndexerV2CandidateBase> & {
+      contractId: string;
+      incomplete: true;
+      incompleteReasons: WalletCandidateIncompleteReason[];
+    });
+
+interface PasskeyIndexerV2LookupBase {
+  schema: 2;
+  credentialId: string;
+  network: "testnet" | "mainnet";
+  indexedThroughLedger: number;
+  rpcCheckedAtLedger: number;
+  candidates: PasskeyIndexerV2Candidate[];
+  count: number;
+  ambiguous: boolean;
+}
+
+type PasskeyIndexerV2LookupResponse = PasskeyIndexerV2LookupBase &
+  (
+    | { complete: true; incompleteReasons?: never }
+    | {
+        complete: false;
+        /** Response-level causes. Candidate causes stay on their row. */
+        incompleteReasons?: WalletLookupIncompleteReason[];
+      }
+  );
+
 export interface MercuryIndexerConfig {
   /**
    * Hosted passkey-indexer base URL, e.g.
@@ -115,12 +173,20 @@ export interface MercuryIndexerConfig {
 }
 
 export class MercuryIndexer implements SignerIndexer {
+  private expectedNetwork?: "testnet" | "mainnet";
+
   constructor(private readonly config: MercuryIndexerConfig) {
     if (!config.url) {
       throw new IndexerError(
         "MercuryIndexer requires a url",
         PasskeyKitErrorCode.INDEXER_NOT_CONFIGURED
       );
+    }
+    const normalizedUrl = config.url.replace(/\/$/, "");
+    if (normalizedUrl === MERCURY_PASSKEY_INDEXER_URLS.testnet) {
+      this.expectedNetwork = "testnet";
+    } else if (normalizedUrl === MERCURY_PASSKEY_INDEXER_URLS.mainnet) {
+      this.expectedNetwork = "mainnet";
     }
   }
 
@@ -136,7 +202,14 @@ export class MercuryIndexer implements SignerIndexer {
   ): MercuryIndexer | null {
     const url = config.url ?? mercuryPasskeyIndexerUrl(networkPassphrase);
     if (!url) return null;
-    return new MercuryIndexer({ ...config, url });
+    const indexer = new MercuryIndexer({ ...config, url });
+    if (networkPassphrase === Networks.TESTNET) {
+      indexer.expectedNetwork = "testnet";
+    }
+    if (networkPassphrase === Networks.PUBLIC) {
+      indexer.expectedNetwork = "mainnet";
+    }
+    return indexer;
   }
 
   /**
@@ -231,12 +304,18 @@ export class MercuryIndexer implements SignerIndexer {
     // Secp256r1 keys are looked up by hex credential id; ed25519/policy keys by
     // their strkey address. The SDK carries the Secp256r1 keyId as base64url, so
     // convert to the hex the credential-id route expects.
-    const path =
+    const credentialId =
       key.key === "Secp256r1"
-        ? `/api/lookup/${base64url.toBuffer(key.value).toString("hex")}`
-        : `/api/lookup/address/${key.value}`;
+        ? base64url.toBuffer(key.value).toString("hex")
+        : undefined;
+    const path = credentialId
+      ? `/api/v2/lookup/${credentialId}`
+      : `/api/lookup/address/${key.value}`;
     const res = await this.get<unknown>(path);
-    return this.confirmCandidates(parseLookupResponse(res), key);
+    const lookup = credentialId
+      ? parseV2LookupResponse(res, credentialId, this.expectedNetwork)
+      : parseLegacyLookupResponse(res);
+    return this.confirmCandidates(lookup, key);
   }
 
   /**
@@ -361,6 +440,12 @@ function parseLedger(value: unknown): number | undefined {
   return undefined;
 }
 
+function parseV2Ledger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1
+    ? value
+    : undefined;
+}
+
 function parseWalletRef(value: unknown): IncompleteWalletCandidate | undefined {
   if (!isRecord(value)) return undefined;
   const contractId = readString(value, ["contract_id", "contractId"]);
@@ -419,7 +504,7 @@ function sameContractIds(
 }
 
 /** Map a lookup JSON body onto {@link WalletCandidateLookup} without inventing birth data. */
-function parseLookupResponse(res: unknown): WalletCandidateLookup {
+function parseLegacyLookupResponse(res: unknown): WalletCandidateLookup {
   if (!isRecord(res)) {
     return { complete: false, candidates: [] };
   }
@@ -468,6 +553,230 @@ function parseLookupResponse(res: unknown): WalletCandidateLookup {
     ...(typeof res.schema === "number" ? { schema: res.schema } : {}),
     ...(indexedThroughLedger !== undefined ? { indexedThroughLedger } : {}),
     candidates,
+  };
+}
+
+const CANDIDATE_INCOMPLETE_REASONS = new Set<WalletCandidateIncompleteReason>([
+  "missing_birth",
+  "rpc_unchecked",
+  "signer_unconfirmed",
+  "instance_missing",
+  "wasm_unresolved",
+  "inconsistent_creation_ledger",
+]);
+const LOOKUP_INCOMPLETE_REASONS = new Set<WalletLookupIncompleteReason>([
+  "reducer_errors",
+  "index_behind",
+]);
+const PUBLIC_KEY_HEX = /^04[0-9a-f]{128}$/;
+
+function closedReasons<T extends string>(
+  value: unknown,
+  allowed: ReadonlySet<T>
+): T[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  if (
+    !value.every(
+      (reason): reason is T =>
+        typeof reason === "string" && allowed.has(reason as T)
+    )
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
+function v2SignerIsComplete(value: unknown): value is PasskeyIndexerV2SignerJson {
+  if (!isRecord(value)) return false;
+  const expiration = value.expiration;
+  const expirationUnit = value.expiration_unit;
+  return (
+    typeof value.publicKey === "string" &&
+    PUBLIC_KEY_HEX.test(value.publicKey) &&
+    (expiration === null ||
+      (typeof expiration === "number" &&
+        Number.isSafeInteger(expiration) &&
+        expiration >= 0)) &&
+    ((expiration === null && expirationUnit === null) ||
+      (expiration !== null &&
+        (expirationUnit === "unix" || expirationUnit === "ledger"))) &&
+    (value.storage === "persistent" || value.storage === "temporary") &&
+    value.status === "live" &&
+    value.rpcConfirmed === true
+  );
+}
+
+function parseV2DiagnosticCandidate(
+  value: unknown
+): IncompleteWalletCandidate | undefined {
+  const candidate = parseWalletRef(value);
+  if (!candidate || !isRecord(value)) return candidate;
+  if (value.incomplete === true) {
+    const reasons = closedReasons(
+      value.incompleteReasons,
+      CANDIDATE_INCOMPLETE_REASONS
+    );
+    if (reasons) candidate.incompleteReasons = reasons;
+  }
+  return candidate;
+}
+
+function v2EnvelopeIsComplete(
+  input: unknown,
+  credentialId: string,
+  indexedThroughLedger: number | undefined,
+  expectedNetwork?: "testnet" | "mainnet"
+): input is PasskeyIndexerV2LookupResponse {
+  if (!isRecord(input)) return false;
+  const value = input;
+  const rpcCheckedAtLedger = parseV2Ledger(value.rpcCheckedAtLedger);
+  return (
+    value.schema === 2 &&
+    value.credentialId === credentialId &&
+    expectedNetwork !== undefined &&
+    value.network === expectedNetwork &&
+    value.complete === true &&
+    indexedThroughLedger !== undefined &&
+    rpcCheckedAtLedger !== undefined &&
+    indexedThroughLedger >= rpcCheckedAtLedger &&
+    Array.isArray(value.candidates) &&
+    (!Object.hasOwn(value, "wallets") ||
+      (Array.isArray(value.wallets) &&
+        sameContractIds(
+          value.candidates
+            .map(parseWalletRef)
+            .filter(
+              (candidate): candidate is IncompleteWalletCandidate =>
+                candidate !== undefined
+            ),
+          value.wallets
+        ))) &&
+    Number.isSafeInteger(value.count) &&
+    value.count === value.candidates.length &&
+    typeof value.ambiguous === "boolean" &&
+    !("incompleteReasons" in value)
+  );
+}
+
+function parseCompleteV2Candidate(
+  value: unknown
+):
+  | (WalletCandidate & { derivedAddress: boolean; collision: boolean })
+  | undefined {
+  if (!isRecord(value) || value.incomplete !== false) return undefined;
+  if ("incompleteReasons" in value) return undefined;
+
+  const contractId = value.contractId;
+  const birthWasmHash = value.birthWasmHash;
+  const creationTransactionHash = value.creationTransactionHash;
+  const creationLedger = parseV2Ledger(value.creationLedger);
+  if (
+    typeof contractId !== "string" ||
+    !StrKey.isValidContract(contractId) ||
+    typeof birthWasmHash !== "string" ||
+    !HEX_64.test(birthWasmHash) ||
+    typeof creationTransactionHash !== "string" ||
+    !HEX_64.test(creationTransactionHash) ||
+    creationLedger === undefined ||
+    typeof value.currentWasmHash !== "string" ||
+    !HEX_64.test(value.currentWasmHash) ||
+    (value.generation !== "legacy" && value.generation !== "v1") ||
+    typeof value.derivedAddress !== "boolean" ||
+    typeof value.collision !== "boolean" ||
+    !v2SignerIsComplete(value.signer)
+  ) {
+    return undefined;
+  }
+
+  return {
+    contractId,
+    birthWasmHash,
+    creationTransactionHash,
+    creationLedger,
+    derivedAddress: value.derivedAddress,
+    collision: value.collision,
+  };
+}
+
+/** Parse the frozen Mercury credential-lookup v2 wire contract fail-closed. */
+function parseV2LookupResponse(
+  res: unknown,
+  credentialId: string,
+  expectedNetwork?: "testnet" | "mainnet"
+): WalletCandidateLookup {
+  if (!isRecord(res)) return { complete: false, candidates: [] };
+
+  const rows = Array.isArray(res.candidates) ? res.candidates : [];
+  const diagnosticRows =
+    rows.length > 0 || !Array.isArray(res.wallets) ? rows : res.wallets;
+  const diagnosticCandidates = diagnosticRows
+    .map(parseV2DiagnosticCandidate)
+    .filter(
+      (candidate): candidate is IncompleteWalletCandidate =>
+        candidate !== undefined
+    );
+  const indexedThroughLedger = parseV2Ledger(res.indexedThroughLedger);
+  const responseReasons = closedReasons(
+    res.incompleteReasons,
+    LOOKUP_INCOMPLETE_REASONS
+  );
+  const incomplete = (): WalletCandidateLookup => ({
+    complete: false,
+    ...(typeof res.schema === "number" ? { schema: res.schema } : {}),
+    ...(indexedThroughLedger !== undefined ? { indexedThroughLedger } : {}),
+    ...(responseReasons ? { incompleteReasons: responseReasons } : {}),
+    candidates: diagnosticCandidates,
+  });
+
+  if (
+    !v2EnvelopeIsComplete(
+      res,
+      credentialId,
+      indexedThroughLedger,
+      expectedNetwork
+    )
+  ) {
+    return incomplete();
+  }
+
+  const candidates = rows.map(parseCompleteV2Candidate);
+  if (candidates.some((candidate) => candidate === undefined)) {
+    return incomplete();
+  }
+  const completeCandidates = candidates as Array<
+    WalletCandidate & { derivedAddress: boolean; collision: boolean }
+  >;
+  const ids = new Set(completeCandidates.map(({ contractId }) => contractId));
+  const ambiguous = ids.size > 1;
+  const hasDerived = completeCandidates.some(
+    ({ derivedAddress }) => derivedAddress
+  );
+  const hasNonDerived = completeCandidates.some(
+    ({ derivedAddress }) => !derivedAddress
+  );
+  const collision = hasDerived && hasNonDerived;
+  if (
+    ids.size !== completeCandidates.length ||
+    res.ambiguous !== ambiguous ||
+    completeCandidates.some(
+      (candidate) => candidate.creationLedger > res.indexedThroughLedger
+    ) ||
+    completeCandidates.some((candidate) => candidate.collision !== collision)
+  ) {
+    return incomplete();
+  }
+
+  return {
+    schema: 2,
+    complete: true,
+    indexedThroughLedger: res.indexedThroughLedger,
+    candidates: completeCandidates.map(
+      ({
+        derivedAddress: _derivedAddress,
+        collision: _collision,
+        ...candidate
+      }) => candidate
+    ),
   };
 }
 

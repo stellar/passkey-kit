@@ -14,7 +14,7 @@ The versions checked into each `package.json` are authoritative; `npm view` is t
 |---|---|
 | `passkey-kit-sdk` | `0.9.0` |
 | `sac-sdk` | `0.4.4` |
-| `passkey-kit` | `0.17.1` (schema-2 compatibility and documentation — see [CHANGELOG](../CHANGELOG.md)) |
+| `passkey-kit` | `0.17.3` (Mercury v2 discovery — see [CHANGELOG](../CHANGELOG.md)) |
 
 > [!IMPORTANT]
 > Publishing is an **outward-facing, user-gated** step. Bump the versions intentionally, and have the person with npm access run the publish commands (they hold the credentials and the OTP device).
@@ -119,8 +119,10 @@ Use a **fresh** OTP for each publish (codes expire in ~30s). npm package version
 Publishing the npm packages does **not** deploy contracts, the indexer, or the workers. Those are separate, gated steps:
 
 - **Contract WASM** and its canonical hash: [`deployments-2026-09-01.md`](./deployments-2026-09-01.md). Every user wallet deploys its own instance. The smart-wallet WASM is not a singleton.
-- **Mercury passkey-indexer** — hosted and **keyless**. The indexer team must deploy the schema-2 candidate response.
-  The SDK fails closed for fresh-device discovery until that response is available.
+- **Mercury passkey-indexer** — hosted and **keyless**. The SDK uses the v2 credential route on supported networks.
+  Testnet fixtures verified the schema-2 candidate response on 2026-09-08.
+  This check did not independently verify mainnet v2 responses.
+  The SDK fails closed for incomplete, stale, malformed, or ambiguous responses.
   See [`indexer-signer-provenance-response.md`](./indexer-signer-provenance-response.md).
 - **Relayer-proxy worker** (Cloudflare): [`relayer-proxy/README.md`](../relayer-proxy/README.md) (`pnpm deploy` / `pnpm deploy:production`).
 - **Demo** (Cloudflare Pages): root `wrangler.toml`, `pnpm run deploy:demo` / `deploy:demo:prod`.

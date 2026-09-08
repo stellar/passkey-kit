@@ -66,9 +66,23 @@ export interface WalletCandidate {
   creationLedger: number;
 }
 
+/** Closed Mercury v2 causes for one incomplete candidate. */
+export type WalletCandidateIncompleteReason =
+  | "missing_birth"
+  | "rpc_unchecked"
+  | "signer_unconfirmed"
+  | "instance_missing"
+  | "wasm_unresolved"
+  | "inconsistent_creation_ledger";
+
+/** Closed Mercury v2 causes for an incomplete lookup response. */
+export type WalletLookupIncompleteReason = "reducer_errors" | "index_behind";
+
 /** An incomplete row retained only for diagnostics. It is never connectable. */
 export type IncompleteWalletCandidate = Partial<WalletCandidate> & {
   contractId: string;
+  /** Mercury v2 candidate-level causes. Present only for an incomplete row. */
+  incompleteReasons?: WalletCandidateIncompleteReason[];
 };
 
 /**
@@ -88,6 +102,8 @@ export type WalletCandidateLookup =
       schema?: number;
       complete: false;
       indexedThroughLedger?: number;
+      /** Mercury v2 response-level causes. These do not describe one row. */
+      incompleteReasons?: WalletLookupIncompleteReason[];
       /** Diagnostic rows only. Callers must reject the full response. */
       candidates: IncompleteWalletCandidate[];
     };

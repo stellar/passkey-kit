@@ -351,14 +351,15 @@ The SDK abstracts discovery behind a `SignerIndexer` interface (`getSigners` / `
 
 | Backend | Config | Wire | Status |
 |---|---|---|---|
-| `MercuryIndexer` | `MercuryIndexerConfig` (`url?`, `rpc?`) | Keyless REST (`GET /api/wallet/*`, `/api/lookup/*`) | Signer enumeration is live on testnet and mainnet. Schema-2 wallet candidates are pending. |
+| `MercuryIndexer` | `MercuryIndexerConfig` (`url?`, `rpc?`) | Keyless REST (`GET /api/wallet/*`, `/api/v2/lookup/*`, `/api/lookup/address/*`) | The SDK uses the versioned credential route on supported networks. Testnet fixtures verified the schema-2 response on 2026-09-08. |
 
 > [!NOTE]
 > Mercury's hosted passkey-indexer is public and **keyless** on testnet and mainnet.
-> Its current API supports signer enumeration.
-> As of 2026-09-01, its lookup route does not return the required schema-2 birth claims.
-> The SDK therefore fails closed for fresh-device discovery.
-> Verified local wallet records continue to connect.
+> Its v2 credential route returns immutable birth claims and complete ledger positions.
+> The SDK validates the frozen v2 shape.
+> It verifies candidate birth, current code, and signer state independently.
+> An incomplete, stale, malformed, or ambiguous result still fails closed.
+> The 2026-09-08 fixture check covered testnet only. It did not independently verify mainnet v2 responses.
 > See the [schema-2 response contract](docs/indexer-signer-provenance-response.md).
 
 ```ts
@@ -500,6 +501,9 @@ enum SignerStore { Persistent = "Persistent", Temporary = "Temporary" }
 
 Signer and signature expiration are **UNIX timestamps in seconds** (inclusive: valid while `now <= expiration`). Pre-1.0 these were ledger sequence numbers; timestamps don't drift as ledger close-time changes.
 
+`connectWallet` applies the same boundary to the stored on-chain passkey signer.
+It uses the latest Stellar RPC ledger close timestamp.
+
 ## Caveats
 
 > [!WARNING]
@@ -507,7 +511,7 @@ Signer and signature expiration are **UNIX timestamps in seconds** (inclusive: v
 
 - **Limit value and authority.** Limit wallet balances, signer permissions, policy allowances, and relayer permissions. Monitor wallet activity. Keep independent recovery, submission, and authorized upgrade paths.
 - **Hosted services can fail or return stale data.** Do not treat relayer or indexer responses as authoritative chain state. Confirm security-sensitive state through Stellar RPC.
-- **Fresh-device discovery needs schema 2.** The hosted Mercury lookup does not yet return schema-2 birth claims. The SDK fails closed until deployment.
+- **Fresh-device discovery needs a complete schema-2 result.** The SDK uses Mercury's v2 route on supported networks. Testnet fixtures verified the response on 2026-09-08. Mainnet v2 responses were not independently verified. The SDK still rejects incomplete, stale, malformed, or ambiguous results.
 - **Keep at least one durable admin signer.** The contract rejects any change that would remove or demote its last durable (`Persistent`, non-expiring) admin signer (`LastAdminSigner = 103`) or leave it without any durable signer (`LastSigner = 104`), so a wallet always retains one signer that cannot evict or expire. Signers outside that guard — `Temporary` storage or with an expiration — lapse on their own: add a replacement *before* removing or demoting an existing signer.
 - **The default deployer is a shared, public keypair — its secret is publicly derivable.** It salts deployment and signs only the CreateContractV2 authorization entry; the relayer supplies the envelope source, sequence, and fees. It never controls the wallet. Its determinism is load-bearing for discovery: overriding `deploySource` changes every derived address and breaks keyId → wallet lookup. Use a separate funded `restoreSource` for `restoreFootprint`; never fund the shared deployer. A third-party `bumpSequence` to `INT64_MAX` no longer blocks the current SDK because it never uses the shared deployer as an envelope source. Full analysis: [`docs/security-deterministic-deployer.md`](docs/security-deterministic-deployer.md).
 - **Current code identity is not signer provenance.** The SDK also verifies immutable birth code and address-bound proofs. See the [signer-provenance design](docs/security-signer-provenance-v2.md).
