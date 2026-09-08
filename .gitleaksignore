@@ -1,0 +1,13 @@
+# Expired historical demo JWTs. All expiry times precede 2026.
+8750d7a3c9047bd4b93174e6007a50cd03a0769d:wrangler.toml:jwt:9
+8750d7a3c9047bd4b93174e6007a50cd03a0769d:wrangler.toml:jwt:11
+8750d7a3c9047bd4b93174e6007a50cd03a0769d:wrangler.toml:jwt:20
+8750d7a3c9047bd4b93174e6007a50cd03a0769d:wrangler.toml:jwt:22
+40a05cc17980882532fcdc6ecd0f460dbe91d36b:demo/src/App.svelte:jwt:23
+
+# Removed demo seeds. Their public accounts do not exist on current public networks.
+5f036537ffb4cc6f8cc0145c3c3731ad51873e72:demo/src/App.svelte:generic-api-key:35
+69503c94cd49e5f5032d2da0ead2fad8fe4fd593:demo/src/App.svelte:generic-api-key:35
+55774d2a9aaf5f61c9d23c63f78682987e587183:demo/src/App.svelte:generic-api-key:271
+dd0bec9f6744f98aae998d82a9b974abdb333893:demo/src/App.svelte:generic-api-key:372
+dd0bec9f6744f98aae998d82a9b974abdb333893:demo/src/App.svelte:generic-api-key:413
