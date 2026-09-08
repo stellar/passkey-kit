@@ -2,7 +2,7 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
-## Unreleased
+## 0.18.0 — 2026-09-08
 
 - **Bound the supported Stellar SDK version.** All package peers now require
   `@stellar/stellar-sdk ^16.3.0`. Stellar SDK 17 changed the XDR API and is not
