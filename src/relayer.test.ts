@@ -204,6 +204,50 @@ describe("RelayerClient.send", () => {
     }
   });
 
+  it("maps a response body read failure to a transport RelayerError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        ({
+          status: 200,
+          json: async () => {
+            throw new TypeError("terminated");
+          },
+        }) as Response
+      )
+    );
+    const relayer = new RelayerClient({
+      baseUrl: "https://relayer.test",
+      apiKey: "k",
+    });
+
+    const result = await relayer.send("FUNC", []);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBeInstanceOf(RelayerError);
+      expect(result.error.context).toMatchObject({ category: "transport" });
+    }
+  });
+
+  it("replaces an empty relayer error with an actionable message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ success: false, error: "" }, { status: 400 })
+      )
+    );
+    const relayer = new RelayerClient({
+      baseUrl: "https://relayer.test",
+      apiKey: "k",
+    });
+
+    const result = await relayer.send("FUNC", []);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.message).toBe("Relayer execution failed");
+    }
+  });
+
   it("decodes an on-chain contract error surfaced by the relayer", async () => {
     vi.stubGlobal(
       "fetch",
@@ -234,6 +278,41 @@ describe("RelayerClient.send", () => {
 });
 
 describe("RelayerClient.sendTransaction", () => {
+  it("posts the envelope and polling request shapes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          success: true,
+          data: { transactionId: "tx-http", hash: "hash-http", status: "success" },
+        })
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          success: true,
+          data: { transactionId: "tx-http", hash: "hash-http", status: "confirmed" },
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const relayer = new RelayerClient({
+      baseUrl: "https://relayer.test",
+      apiKey: "k",
+    });
+
+    await relayer.sendTransaction("ENVELOPE_XDR");
+    await relayer.getTransaction("tx-http");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]![1]?.body).toBe(
+      JSON.stringify({ params: { xdr: "ENVELOPE_XDR" } })
+    );
+    expect(fetchMock.mock.calls[1]![1]?.body).toBe(
+      JSON.stringify({
+        params: { getTransaction: { transactionId: "tx-http" } },
+      })
+    );
+  });
+
   it("submits an envelope via submitTransaction", async () => {
     const submitTransaction = vi.fn(async () => ({
       transactionId: "tx-9",

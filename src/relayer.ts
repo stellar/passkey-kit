@@ -162,9 +162,14 @@ class ChannelsClient {
     try {
       body = await response.json();
     } catch (error) {
+      const category = error instanceof SyntaxError ? "client" : "transport";
       throw new ChannelsClientError(
-        `Malformed response from relayer (HTTP ${response.status})`,
-        "client",
+        category === "client"
+          ? `Malformed response from relayer (HTTP ${response.status})`
+          : `Network error while reading relayer response: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+        category,
         undefined,
         error
       );
@@ -194,7 +199,7 @@ class ChannelsClient {
           }
         : result.data;
       throw new ChannelsClientError(
-        typeof result.error === "string"
+        typeof result.error === "string" && result.error.trim()
           ? result.error
           : "Relayer execution failed",
         "execution",
