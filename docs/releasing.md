@@ -89,7 +89,9 @@ pnpm --filter sac-sdk publish --dry-run --no-git-checks
 pnpm publish --dry-run --no-git-checks   # from the repo root: passkey-kit
 ```
 
-Confirm the `files` whitelist (`dist`, `README.md`, `LICENCE`) is what ships, and that `passkey-kit`'s dry run resolved the `workspace:*` deps to the concrete binding versions.
+Confirm the `files` whitelist (`dist`, `README.md`, `LICENCE`, `SECURITY.md`) is
+what ships. Confirm that `passkey-kit` uses the exact binding versions from the
+version table above.
 
 ## 5. Publish
 
