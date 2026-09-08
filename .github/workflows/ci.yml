@@ -58,6 +58,9 @@ jobs:
       # build rather than be silently resolved away.
       - run: pnpm install --frozen-lockfile
 
+      - name: Verify publish manifest
+        run: pnpm run verify:publish-manifest
+
       # relayer-proxy is NOT a workspace member (the workspace is `packages/**`)
       # but the root vitest run picks up its tests, so its deps must be present.
       - name: Install relayer-proxy dependencies

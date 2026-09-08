@@ -61,6 +61,7 @@ pnpm run verify:bindings
 ```bash
 pnpm install --frozen-lockfile
 pnpm run verify:bindings
+pnpm run verify:publish-manifest
 pnpm run build            # build:bindings → tsc → verify-esm
 pnpm test --run           # tests import the built binding packages
 pnpm run build:demo       # ensure the demo still builds against the SDK
@@ -70,8 +71,10 @@ git status --short
 
 `pnpm run build` runs `build:bindings`, compiles the SDK to `dist/`, and runs the Node-ESM import smoke test (`verify-esm.mjs`). Commit any intended changes before continuing — publish from a clean tree.
 
-The `prepublishOnly` guard rejects `npm publish`. Only `pnpm publish` rewrites
-the `workspace:*` dependencies to concrete package versions.
+The root manifest uses exact binding versions. This keeps the published
+manifest installable even if a publish command skips lifecycle scripts. The
+`verify:publish-manifest` check keeps those versions aligned with the workspace
+packages. The `prepublishOnly` guard also rejects normal npm CLI publication.
 
 Publish only after the release commit is merged and tagged.
 The tag must resolve to the exact commit that produces the package.

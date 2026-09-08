@@ -4,8 +4,12 @@ All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry cover
 
 ## 0.18.3 — 2026-09-08
 
-- **Rejected publication through npm CLI.** The release guard now requires
-  `pnpm publish`, which rewrites workspace dependencies to concrete versions.
+- **Made dependency fields independent of the publish tool.** Runtime
+  dependencies now use exact package versions instead of workspace protocols.
+- **Added a manifest consistency check.** CI and publication verify that each
+  exact dependency matches its workspace package version.
+- **Rejected normal publication through npm CLI.** The release guard still
+  requires `pnpm publish` for the documented release process.
 - **Replaced the broken `0.18.2` package.** That npm artifact preserved
   `workspace:*` dependency values and cannot install through npm.
 - **Kept runtime behavior unchanged.** This patch uses the same wallet WASM,

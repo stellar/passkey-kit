@@ -6,6 +6,8 @@ settings:
 
 overrides:
   '@stellar/stellar-sdk': ^16.3.0
+  passkey-kit-sdk: link:packages/passkey-kit-sdk
+  sac-sdk: link:packages/sac-sdk
 
 importers:
 
@@ -24,10 +26,10 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
       passkey-kit-sdk:
-        specifier: workspace:*
+        specifier: link:packages/passkey-kit-sdk
         version: link:packages/passkey-kit-sdk
       sac-sdk:
-        specifier: workspace:*
+        specifier: link:packages/sac-sdk
         version: link:packages/sac-sdk
     devDependencies:
       '@types/node':
