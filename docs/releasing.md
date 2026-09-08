@@ -1,12 +1,15 @@
 # Releasing the npm packages
 
-The repository publishes three packages. Release them in this order so each can resolve its workspace dependency to a version that already exists on npm:
+The repository publishes three packages. Release them in this order:
 
 1. `passkey-kit-sdk` (generated smart-wallet bindings)
 2. `sac-sdk` (generated SEP-41 bindings)
-3. `passkey-kit` (the SDK — depends on both via `workspace:*`)
+3. `passkey-kit` (the SDK, with exact dependencies on both binding packages)
 
-The two binding packages are independent; publish them in either order, but both **before** `passkey-kit`. `passkey-kit`'s `dependencies` pin them as `workspace:*`, which pnpm rewrites to the concrete workspace version at pack time — that version must already be on npm for consumers to install.
+The two binding packages are independent. Publish them in either order, but
+publish both before `passkey-kit`. The `passkey-kit` dependencies use exact
+binding versions. Those versions must exist on npm before consumers can install
+`passkey-kit`.
 
 The versions checked into each `package.json` are authoritative; `npm view` is the source of truth for what is already published. Confirm both before publishing.
 
