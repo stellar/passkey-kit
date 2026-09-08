@@ -182,6 +182,12 @@ export class MercuryIndexer implements SignerIndexer {
         PasskeyKitErrorCode.INDEXER_NOT_CONFIGURED
       );
     }
+    const normalizedUrl = config.url.replace(/\/$/, "");
+    if (normalizedUrl === MERCURY_PASSKEY_INDEXER_URLS.testnet) {
+      this.expectedNetwork = "testnet";
+    } else if (normalizedUrl === MERCURY_PASSKEY_INDEXER_URLS.mainnet) {
+      this.expectedNetwork = "mainnet";
+    }
   }
 
   /**
@@ -627,9 +633,8 @@ function v2EnvelopeIsComplete(
   return (
     value.schema === 2 &&
     value.credentialId === credentialId &&
-    (expectedNetwork
-      ? value.network === expectedNetwork
-      : value.network === "testnet" || value.network === "mainnet") &&
+    expectedNetwork !== undefined &&
+    value.network === expectedNetwork &&
     value.complete === true &&
     indexedThroughLedger !== undefined &&
     rpcCheckedAtLedger !== undefined &&

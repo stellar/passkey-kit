@@ -662,6 +662,16 @@ describe("MercuryIndexer.findWallets", () => {
     expect(lookup.complete).toBe(false);
   });
 
+  it("keeps custom-url v2 lookup incomplete without a network binding", async () => {
+    const keyId = base64url.encode(Buffer.alloc(16, 5));
+    stubFetch(() => ({ body: v2Lookup(keyId, []) }));
+    const indexer = new MercuryIndexer({ url: "https://custom.example" });
+
+    const lookup = await indexer.findWallets(SignerKey.Secp256r1(keyId));
+
+    expect(lookup.complete).toBe(false);
+  });
+
   it("rejects duplicate candidate contract IDs", async () => {
     const keyId = base64url.encode(Buffer.alloc(16, 5));
     stubFetch(() => ({
