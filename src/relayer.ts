@@ -1,8 +1,8 @@
 /**
  * Server-side relayer client.
  *
- * A thin, typed wrapper over the OpenZeppelin Channels client
- * (`@openzeppelin/relayer-plugin-channels` ^0.20) for fee-sponsored submission.
+ * A thin, typed wrapper over the OpenZeppelin Channels HTTP API for
+ * fee-sponsored submission.
  * It holds the relayer API key, so it MUST run server-side only (it is reached
  * through `PasskeyServer`, exported from the `passkey-kit/server` subpath).
  *
@@ -20,11 +20,6 @@
  * @packageDocumentation
  */
 
-import {
-  ChannelsClient,
-  PluginClientError,
-  type ChannelsTransactionResponse,
-} from "@openzeppelin/relayer-plugin-channels";
 import type { TransactionResult, TransactionFailure } from "./types.js";
 import { RelayerError, PasskeyKitErrorCode } from "./errors.js";
 import {
@@ -66,6 +61,163 @@ const SUCCESS_STATUS = /\b(?:confirm(?:ed)?|success(?:ful)?)\b/i;
 
 /** Terminal-failure statuses. */
 const FAILURE_STATUS = /fail|error|revert|reject/i;
+
+interface ChannelsTransactionResponse {
+  transactionId: string | null;
+  hash: string | null;
+  status: string | null;
+}
+
+type ChannelsRequest =
+  | {
+      xdr: string;
+      skipWait?: boolean;
+      fundRelayerId?: string;
+    }
+  | {
+      func: string;
+      auth: string[];
+      skipWait?: boolean;
+      fundRelayerId?: string;
+    }
+  | { getTransaction: { transactionId: string } };
+
+interface ChannelsResponse {
+  success: boolean;
+  data?: unknown;
+  error?: unknown;
+  metadata?: unknown;
+}
+
+class ChannelsClientError extends Error {
+  constructor(
+    message: string,
+    readonly category: "transport" | "execution" | "client",
+    readonly errorDetails?: unknown,
+    cause?: unknown
+  ) {
+    super(message, cause instanceof Error ? { cause } : undefined);
+    this.name = "ChannelsClientError";
+  }
+}
+
+/** Direct client for the managed Channels HTTP endpoint. */
+class ChannelsClient {
+  private readonly endpoint: string;
+  private readonly apiKey: string;
+  private readonly timeout: number;
+
+  constructor(config: RelayerClientConfig) {
+    let endpointEnd = config.baseUrl.length;
+    while (endpointEnd > 0 && config.baseUrl[endpointEnd - 1] === "/") {
+      endpointEnd -= 1;
+    }
+    this.endpoint = `${config.baseUrl.slice(0, endpointEnd)}/`;
+    this.apiKey = config.apiKey;
+    this.timeout = config.timeout ?? DEFAULT_RELAYER_TIMEOUT_MS;
+  }
+
+  submitSorobanTransaction(
+    request: Extract<ChannelsRequest, { func: string }>
+  ): Promise<ChannelsTransactionResponse> {
+    return this.call(request);
+  }
+
+  submitTransaction(
+    request: Extract<ChannelsRequest, { xdr: string }>
+  ): Promise<ChannelsTransactionResponse> {
+    return this.call(request);
+  }
+
+  getTransaction(request: {
+    transactionId: string;
+  }): Promise<ChannelsTransactionResponse> {
+    return this.call({ getTransaction: request });
+  }
+
+  private async call(
+    params: ChannelsRequest
+  ): Promise<ChannelsTransactionResponse> {
+    let response: Response;
+    try {
+      response = await fetch(this.endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({ params }),
+        signal: AbortSignal.timeout(this.timeout),
+      });
+    } catch (error) {
+      throw new ChannelsClientError(
+        `Network error: ${error instanceof Error ? error.message : String(error)}`,
+        "transport",
+        undefined,
+        error
+      );
+    }
+
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch (error) {
+      const category = error instanceof SyntaxError ? "client" : "transport";
+      throw new ChannelsClientError(
+        category === "client"
+          ? `Malformed response from relayer (HTTP ${response.status})`
+          : `Network error while reading relayer response: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+        category,
+        undefined,
+        error
+      );
+    }
+
+    if (
+      !body ||
+      typeof body !== "object" ||
+      !("success" in body) ||
+      typeof (body as { success?: unknown }).success !== "boolean"
+    ) {
+      throw new ChannelsClientError(
+        `Malformed response from relayer (HTTP ${response.status})`,
+        "client",
+        body
+      );
+    }
+
+    const result = body as ChannelsResponse;
+    if (!result.success) {
+      const details = result.metadata
+        ? {
+            ...(result.data && typeof result.data === "object"
+              ? result.data
+              : {}),
+            metadata: result.metadata,
+          }
+        : result.data;
+      throw new ChannelsClientError(
+        typeof result.error === "string" && result.error.trim()
+          ? result.error
+          : "Relayer execution failed",
+        "execution",
+        details
+      );
+    }
+
+    if (!result.data || typeof result.data !== "object") {
+      throw new ChannelsClientError(
+        "Malformed response from relayer: missing data",
+        "client",
+        body
+      );
+    }
+
+    return result.data as ChannelsTransactionResponse;
+  }
+}
 
 export class RelayerClient {
   private readonly channels: ChannelsClient;
@@ -177,9 +329,7 @@ export class RelayerClient {
   private mapError(err: unknown): TransactionFailure {
     // Prefer a decoded contract error when the relayer surfaced one.
     const details =
-      err instanceof PluginClientError
-        ? (err as { errorDetails?: unknown }).errorDetails
-        : undefined;
+      err instanceof ChannelsClientError ? err.errorDetails : undefined;
     const contractError =
       (err instanceof Error && decodeContractError(err.message)) ||
       decodeContractError(details);
@@ -187,7 +337,7 @@ export class RelayerClient {
       return failedTransaction(contractError);
     }
 
-    if (err instanceof PluginClientError) {
+    if (err instanceof ChannelsClientError) {
       return failedTransaction(
         new RelayerError(
           err.message,

@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import { PluginExecutionError } from "@openzeppelin/relayer-plugin-channels";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RelayerClient } from "./relayer.js";
 import { ContractError, RelayerError, PasskeyKitErrorCode } from "./errors.js";
 
@@ -9,6 +8,10 @@ function withChannels(fake: Record<string, unknown>): RelayerClient {
   (relayer as unknown as { channels: unknown }).channels = fake;
   return relayer;
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("RelayerClient config", () => {
   it("throws when baseUrl or apiKey is missing", () => {
@@ -22,6 +25,41 @@ describe("RelayerClient config", () => {
 });
 
 describe("RelayerClient.send", () => {
+  it("posts the Channels request with the bearer API key", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        success: true,
+        data: { transactionId: "tx-http", hash: "hash-http", status: "confirmed" },
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const relayer = new RelayerClient({
+      baseUrl: "https://relayer.test/service///",
+      apiKey: "secret",
+    });
+
+    await expect(relayer.send("FUNC", ["AUTH"])).resolves.toEqual({
+      success: true,
+      hash: "hash-http",
+      transactionId: "tx-http",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://relayer.test/service/");
+    expect(fetchMock.mock.calls[0]![1]).toMatchObject({
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer secret",
+      },
+      body: JSON.stringify({
+        params: {
+          func: "FUNC",
+          auth: ["AUTH"],
+        },
+      }),
+    });
+  });
+
   it("returns a success result for a confirmed submission", async () => {
     const submitSorobanTransaction = vi.fn(async () => ({
       transactionId: "tx-1",
@@ -100,13 +138,23 @@ describe("RelayerClient.send", () => {
     }
   });
 
-  it("never throws on a PluginClientError — maps it to a RelayerError", async () => {
-    const relayer = withChannels({
-      submitSorobanTransaction: vi.fn(async () => {
-        throw new PluginExecutionError("insufficient balance", {
-          code: "FEE_LIMIT_EXCEEDED",
-        });
-      }),
+  it("never throws on a Channels error — maps it to a RelayerError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          {
+            success: false,
+            error: "insufficient balance",
+            data: { code: "FEE_LIMIT_EXCEEDED" },
+          },
+          { status: 400 }
+        )
+      )
+    );
+    const relayer = new RelayerClient({
+      baseUrl: "https://relayer.test",
+      apiKey: "k",
     });
 
     const result = await relayer.send("FUNC", []);
@@ -118,11 +166,104 @@ describe("RelayerClient.send", () => {
     }
   });
 
+  it("maps a network failure to a transport RelayerError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("connection refused");
+      })
+    );
+    const relayer = new RelayerClient({
+      baseUrl: "https://relayer.test",
+      apiKey: "k",
+    });
+
+    const result = await relayer.send("FUNC", []);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBeInstanceOf(RelayerError);
+      expect(result.error.context).toMatchObject({ category: "transport" });
+    }
+  });
+
+  it("maps a malformed response to a client RelayerError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not JSON", { status: 502 }))
+    );
+    const relayer = new RelayerClient({
+      baseUrl: "https://relayer.test",
+      apiKey: "k",
+    });
+
+    const result = await relayer.send("FUNC", []);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBeInstanceOf(RelayerError);
+      expect(result.error.context).toMatchObject({ category: "client" });
+    }
+  });
+
+  it("maps a response body read failure to a transport RelayerError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        ({
+          status: 200,
+          json: async () => {
+            throw new TypeError("terminated");
+          },
+        }) as Response
+      )
+    );
+    const relayer = new RelayerClient({
+      baseUrl: "https://relayer.test",
+      apiKey: "k",
+    });
+
+    const result = await relayer.send("FUNC", []);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBeInstanceOf(RelayerError);
+      expect(result.error.context).toMatchObject({ category: "transport" });
+    }
+  });
+
+  it("replaces an empty relayer error with an actionable message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ success: false, error: "" }, { status: 400 })
+      )
+    );
+    const relayer = new RelayerClient({
+      baseUrl: "https://relayer.test",
+      apiKey: "k",
+    });
+
+    const result = await relayer.send("FUNC", []);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.message).toBe("Relayer execution failed");
+    }
+  });
+
   it("decodes an on-chain contract error surfaced by the relayer", async () => {
-    const relayer = withChannels({
-      submitSorobanTransaction: vi.fn(async () => {
-        throw new PluginExecutionError("HostError: Error(Contract, #4)");
-      }),
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          {
+            success: false,
+            error: "HostError: Error(Contract, #4)",
+          },
+          { status: 400 }
+        )
+      )
+    );
+    const relayer = new RelayerClient({
+      baseUrl: "https://relayer.test",
+      apiKey: "k",
     });
 
     const result = await relayer.send("FUNC", []);
@@ -137,6 +278,41 @@ describe("RelayerClient.send", () => {
 });
 
 describe("RelayerClient.sendTransaction", () => {
+  it("posts the envelope and polling request shapes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          success: true,
+          data: { transactionId: "tx-http", hash: "hash-http", status: "success" },
+        })
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          success: true,
+          data: { transactionId: "tx-http", hash: "hash-http", status: "confirmed" },
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const relayer = new RelayerClient({
+      baseUrl: "https://relayer.test",
+      apiKey: "k",
+    });
+
+    await relayer.sendTransaction("ENVELOPE_XDR");
+    await relayer.getTransaction("tx-http");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]![1]?.body).toBe(
+      JSON.stringify({ params: { xdr: "ENVELOPE_XDR" } })
+    );
+    expect(fetchMock.mock.calls[1]![1]?.body).toBe(
+      JSON.stringify({
+        params: { getTransaction: { transactionId: "tx-http" } },
+      })
+    );
+  });
+
   it("submits an envelope via submitTransaction", async () => {
     const submitTransaction = vi.fn(async () => ({
       transactionId: "tx-9",
