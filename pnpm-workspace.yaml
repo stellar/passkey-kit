@@ -1,2 +1,6 @@
 packages:
   - 'packages/**'
+overrides:
+  '@stellar/stellar-sdk': '$@stellar/stellar-sdk'
+  passkey-kit-sdk: 'link:packages/passkey-kit-sdk'
+  sac-sdk: 'link:packages/sac-sdk'

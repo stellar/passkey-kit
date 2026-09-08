@@ -1,12 +1,15 @@
 # Releasing the npm packages
 
-The repository publishes three packages. Release them in this order so each can resolve its workspace dependency to a version that already exists on npm:
+The repository publishes three packages. Release them in this order:
 
 1. `passkey-kit-sdk` (generated smart-wallet bindings)
 2. `sac-sdk` (generated SEP-41 bindings)
-3. `passkey-kit` (the SDK — depends on both via `workspace:*`)
+3. `passkey-kit` (the SDK, with exact dependencies on both binding packages)
 
-The two binding packages are independent; publish them in either order, but both **before** `passkey-kit`. `passkey-kit`'s `dependencies` pin them as `workspace:*`, which pnpm rewrites to the concrete workspace version at pack time — that version must already be on npm for consumers to install.
+The two binding packages are independent. Publish them in either order, but
+publish both before `passkey-kit`. The `passkey-kit` dependencies use exact
+binding versions. Those versions must exist on npm before consumers can install
+`passkey-kit`.
 
 The versions checked into each `package.json` are authoritative; `npm view` is the source of truth for what is already published. Confirm both before publishing.
 
@@ -14,7 +17,7 @@ The versions checked into each `package.json` are authoritative; `npm view` is t
 |---|---|
 | `passkey-kit-sdk` | `0.9.0` |
 | `sac-sdk` | `0.4.4` |
-| `passkey-kit` | `0.18.2` (clean package fix — see [CHANGELOG](../CHANGELOG.md)) |
+| `passkey-kit` | `0.18.3` (publish-tool guard — see [CHANGELOG](../CHANGELOG.md)) |
 
 > [!IMPORTANT]
 > Publishing is an **outward-facing, user-gated** step. Bump the versions intentionally, and have the person with npm access run the publish commands (they hold the credentials and the OTP device).
@@ -61,6 +64,7 @@ pnpm run verify:bindings
 ```bash
 pnpm install --frozen-lockfile
 pnpm run verify:bindings
+pnpm run verify:publish-manifest
 pnpm run build            # build:bindings → tsc → verify-esm
 pnpm test --run           # tests import the built binding packages
 pnpm run build:demo       # ensure the demo still builds against the SDK
@@ -69,6 +73,11 @@ git status --short
 ```
 
 `pnpm run build` runs `build:bindings`, compiles the SDK to `dist/`, and runs the Node-ESM import smoke test (`verify-esm.mjs`). Commit any intended changes before continuing — publish from a clean tree.
+
+The root manifest uses exact binding versions. This keeps the published
+manifest installable even if a publish command skips lifecycle scripts. The
+`verify:publish-manifest` check keeps those versions aligned with the workspace
+packages. The `prepublishOnly` guard also rejects normal npm CLI publication.
 
 Publish only after the release commit is merged and tagged.
 The tag must resolve to the exact commit that produces the package.
@@ -83,7 +92,9 @@ pnpm --filter sac-sdk publish --dry-run --no-git-checks
 pnpm publish --dry-run --no-git-checks   # from the repo root: passkey-kit
 ```
 
-Confirm the `files` whitelist (`dist`, `README.md`, `LICENCE`) is what ships, and that `passkey-kit`'s dry run resolved the `workspace:*` deps to the concrete binding versions.
+Confirm the `files` whitelist (`dist`, `README.md`, `LICENCE`, `SECURITY.md`) is
+what ships. Confirm that `passkey-kit` uses the exact binding versions from the
+version table above.
 
 ## 5. Publish
 
