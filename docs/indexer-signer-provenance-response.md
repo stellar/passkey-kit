@@ -1,6 +1,8 @@
 # Mercury schema-2 wallet candidate response
 
-Status: required by `passkey-kit@0.17.0` and later, but not yet deployed.
+Status: the SDK uses this route on supported networks.
+Testnet fixtures verified the response contract on 2026-09-08.
+This check did not independently verify mainnet v2 responses.
 
 This document defines the public response contract for fresh-device wallet discovery.
 It contains no private report data.
@@ -11,20 +13,16 @@ It does not describe the closed security issue.
 Mercury hosts public, keyless indexers on testnet and mainnet.
 The signer enumeration routes are live.
 
-As of 2026-09-01, the lookup routes return the old response shape.
-That shape has `wallets` and `count` fields.
-It does not contain wallet birth claims or a complete ledger position.
-
-`passkey-kit@0.17.0` and later treat the old shape as incomplete.
-Fresh-device discovery therefore fails closed.
-Verified local wallet records continue to connect.
+Verified testnet v2 responses return wallet birth claims and a complete ledger position.
+The address route keeps its existing path and response behavior.
+The SDK validates the v2 response before it confirms candidates on-chain.
 
 ## Required route
 
-Serve schema 2 on the existing credential lookup route:
+Serve schema 2 on the versioned credential lookup route:
 
 ```text
-GET /api/lookup/:credentialId
+GET /api/v2/lookup/:credentialId
 ```
 
 Keep the route public and keyless.
@@ -37,25 +35,48 @@ Return this response when the scan is complete:
 ```json
 {
   "schema": 2,
+  "credentialId": "lowercase-hexadecimal-credential-id",
+  "network": "testnet",
   "complete": true,
   "indexedThroughLedger": 5440001,
+  "rpcCheckedAtLedger": 5440001,
   "candidates": [
     {
       "contractId": "CC2R2H3DTXS7OCNV3FTNPAZYIRCY2L2OTBG5FZWJV63HXQ35WB2T2NWJ",
       "birthWasmHash": "64-character-lowercase-hex",
       "creationTransactionHash": "64-character-lowercase-hex",
-      "creationLedger": 5432100
+      "creationLedger": 5432100,
+      "currentWasmHash": "64-character-lowercase-hex",
+      "generation": "legacy",
+      "derivedAddress": false,
+      "collision": false,
+      "incomplete": false,
+      "signer": {
+        "publicKey": "130-character-lowercase-hex",
+        "expiration": null,
+        "expiration_unit": null,
+        "storage": "persistent",
+        "status": "live",
+        "rpcConfirmed": true
+      }
     }
-  ]
+  ],
+  "count": 1,
+  "ambiguous": false
 }
 ```
 
 The response has these required fields:
 
 - `schema` must equal `2`.
+- `credentialId` must match the requested hexadecimal credential ID.
+- `network` must equal `testnet` or `mainnet`.
 - `complete` must equal `true` only after a complete scan.
 - `indexedThroughLedger` is the highest fully indexed ledger.
+- `rpcCheckedAtLedger` is the ledger used for current signer checks.
 - `candidates` contains every matching wallet candidate.
+- `count` must equal the candidate count.
+- `ambiguous` is true only when multiple distinct candidates exist.
 
 Each candidate has these required fields:
 
@@ -68,9 +89,32 @@ Use lowercase hexadecimal strings for both hashes.
 Each hash must contain 64 characters.
 Use a safe positive integer for each ledger number.
 
-The SDK accepts snake-case aliases for candidate and ledger fields.
-These aliases include `contract_id`, `birth_wasm_hash`, and `creation_ledger`.
-It also accepts `creation_transaction_hash`, `creation_tx`, and `indexed_through_ledger`.
+Each complete candidate also carries the current WASM hash and event generation.
+It identifies derived-address candidates and credential collisions.
+It carries the RPC-confirmed current signer state.
+The SDK does not use indexer signer key material as signing authority.
+
+`collision` is true only when derived and non-derived candidates coexist.
+It is false for ordinary multi-wallet ambiguity.
+The SDK still verifies all candidates and rejects multiple verified candidates.
+
+An incomplete candidate sets `incomplete` to true.
+Only that candidate can contain `incompleteReasons`.
+The closed candidate reason set is:
+
+- `missing_birth`
+- `rpc_unchecked`
+- `signer_unconfirmed`
+- `instance_missing`
+- `wasm_unresolved`
+- `inconsistent_creation_ledger`
+
+A response can also contain response-level `incompleteReasons`.
+The closed response reason set is `reducer_errors` and `index_behind`.
+Do not add incomplete reasons to a complete response.
+
+The v2 route uses the exact camel-case fields above.
+The address lookup parser still accepts its existing aliases.
 `schema` must be the number `2`, not the string `"2"`.
 
 ## Candidate rules
@@ -104,9 +148,15 @@ Example incomplete response:
 ```json
 {
   "schema": 2,
+  "credentialId": "lowercase-hexadecimal-credential-id",
+  "network": "testnet",
   "complete": false,
   "indexedThroughLedger": 5439000,
-  "candidates": []
+  "rpcCheckedAtLedger": 5440001,
+  "candidates": [],
+  "count": 0,
+  "ambiguous": false,
+  "incompleteReasons": ["index_behind"]
 }
 ```
 
@@ -138,20 +188,9 @@ Every rejection leaves the kit disconnected.
 
 ## Compatibility
 
-Old clients can continue to read the existing `wallets` and `count` fields.
-Add schema-2 fields without removing those fields during the transition.
-Put complete birth rows in the new `candidates` field.
-The new SDK prefers `candidates` when `schema` equals `2`.
-It uses `wallets` for the old response shape.
-When both arrays exist, their `contractId` sets must match.
-A mismatch makes the complete response invalid.
-
-An additive dual-field rollout requires `passkey-kit@0.17.1` or later.
-Version `0.17.0` remains fail-closed on that rollout shape.
-
-The deployed contract and `passkey-kit@0.17.1` support schema 2.
-The indexer deployment is the remaining service step.
-No contract, demo, or relayer change is required for that deployment.
+Secp256r1 lookup uses the versioned v2 route.
+Ed25519 and policy lookup keeps `/api/lookup/address/:address`.
+The contract, demo, and relayer need no change for the route update.
 
 ## Required tests
 
@@ -185,8 +224,8 @@ Confirm that the SDK rejects the response.
 Test every missing required field.
 Confirm that the SDK rejects each response.
 
-Test the old fields during the transition.
-Confirm that old clients remain compatible.
+Test the existing Ed25519 and policy address route.
+Confirm that its path and response behavior stay compatible.
 
 ## Monitoring
 
@@ -200,11 +239,11 @@ Treat credential IDs and public keys as sensitive operational identifiers.
 
 ## Deployment acceptance
 
-The deployment is complete when both networks serve schema 2.
+Do not claim complete deployment until each supported network serves schema 2.
 Each response must include a current indexed ledger position.
 Each complete candidate must include verified birth fields.
 Incomplete scans must remain incomplete.
 
-After deployment, test a fresh-device connection on both networks.
+Test a fresh-device connection on each supported network after each indexer change.
 Confirm that one valid candidate connects.
 Confirm that incomplete, stale, and ambiguous results fail closed.

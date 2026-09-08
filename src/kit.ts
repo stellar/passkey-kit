@@ -475,6 +475,7 @@ export class PasskeyKit {
           }
         : undefined;
 
+    let signerExpirationLedger: Api.GetLatestLedgerResponse | undefined;
     let candidates: readonly WalletCandidate[] = storedCandidate
       ? [storedCandidate]
       : [];
@@ -567,6 +568,33 @@ export class PasskeyKit {
             { contractId: candidate.contractId, keyId: keyIdBase64 }
           );
           continue;
+        }
+        const expiration = signerVal.values[1][0];
+        if (expiration !== undefined) {
+          signerExpirationLedger ??= await this.rpc.getLatestLedger();
+          if (!/^(?:0|[1-9]\d*)$/.test(signerExpirationLedger.closeTime)) {
+            lastMismatch = new WalletOwnershipError(
+              "The latest ledger has an invalid close timestamp",
+              {
+                contractId: candidate.contractId,
+                closeTime: signerExpirationLedger.closeTime,
+              }
+            );
+            continue;
+          }
+          const latestLedgerTimestamp = BigInt(signerExpirationLedger.closeTime);
+          if (latestLedgerTimestamp > expiration) {
+            lastMismatch = new WalletOwnershipError(
+              "The passkey signer is expired on the candidate wallet",
+              {
+                contractId: candidate.contractId,
+                keyId: keyIdBase64,
+                expiration: expiration.toString(),
+                latestLedgerTimestamp: latestLedgerTimestamp.toString(),
+              }
+            );
+            continue;
+          }
         }
         if (!rawResponse || !authenticationChallenge) {
           throw new Error("signer provenance requires a fresh WebAuthn assertion");

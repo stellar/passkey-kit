@@ -18,8 +18,8 @@ The SDK rejects derivation-only discovery.
 It also rejects incomplete, stale, or ambiguous indexer results.
 
 The SDK requires `birthWasmHash`, `creationTransactionHash`, and `creationLedger`.
-Hosted Mercury lookup does not return these fields yet.
-Fresh-device `connectWallet` fails closed until Mercury deploys schema 2.
+Hosted Mercury v2 lookup returns these fields.
+Fresh-device `connectWallet` fails closed on an incomplete or stale response.
 Verified local records still connect.
 The SDK verifies these claims through RPC or Horizon history.
 
@@ -222,8 +222,8 @@ const kit = new PasskeyKit({ /* … */, storage: new IndexedDBStorage() });
 - The new method returns a complete lookup with immutable birth claims.
 - A `SignerIndexer` abstraction resolved by the keyless `MercuryIndexer` — exported from the main `passkey-kit` entry (browser-safe; no token), alongside the browser-safe types + `lookupWithRetry`.
 - Mercury signer enumeration is live through its hosted, **keyless** passkey-indexer.
-- As of 2026-09-01, schema-2 reverse lookup is not deployed.
-- Fresh-device connection fails closed until the hosted lookup returns complete birth claims.
+- Schema-2 reverse lookup uses Mercury's `/api/v2/lookup/:credentialId` route.
+- Fresh-device connection fails closed unless the hosted lookup returns complete birth claims.
 - `MercuryConfig` is an optional `{ url? }`. Resolve it with `MercuryIndexer.forNetwork(...)`.
 
 ## Packaging & imports
@@ -257,13 +257,15 @@ An explicit accounting of capabilities the pre-1.0 version had that v1 changes o
 | `connectWallet({ walletPublicKey })` — resolve/connect a wallet by an Ed25519 `G…` key | **Removed.** `connectWallet` is passkey-ownership-based by design. | Use `server.getWalletCandidates({ publicKey })` for candidate data. Verify each address independently before use. |
 | `sign(xdrString \| Tx)` — sign a raw XDR string or `Tx` | **Removed** (lossy fallback). | `AssembledTransaction.fromXDR(...)` first, then `sign(txn)`. |
 | Per-call `rpId` on `sign` / `connectWallet` | **Moved to the constructor.** | Set `rpId` once on `new PasskeyKit({ rpId })`. |
-| **Signer discovery via Mercury** (`getSigners` / `getWalletCandidates`) | Signer enumeration is live. Schema-2 birth claims are pending. | Use `server.getSigners(contractId)`. Treat an incomplete candidate lookup as unavailable. |
+| **Signer discovery via Mercury** (`getSigners` / `getWalletCandidates`) | Signer enumeration is live. The SDK uses the schema-2 credential route on supported networks. | Use `server.getSigners(contractId)`. Treat an incomplete candidate lookup as unavailable. |
 | Legacy `("sw_v1", …)` tuple events | **Replaced** by typed `#[contractevent]` events. | Consume the new `signer_added`/`signer_updated`/`signer_removed`/`upgraded` schema; Mercury's hosted passkey-indexer already does (and still indexes the legacy tuples for older wallets). |
 | Raw-TypeScript package (import internal source files) | **Removed** — ships compiled `dist/`. | Use the public entry points (`.`, `./storage`, `./server`). |
 
 The v1 contract and SDK intentionally remove unsupported legacy paths.
 Mercury supplies hosted signer enumeration on both networks.
-Schema-2 reverse lookup remains pending.
+The SDK uses Mercury's v2 route for schema-2 credential lookup on supported networks.
+Testnet fixtures verified the response contract on 2026-09-08.
+This check did not independently verify mainnet v2 responses.
 
 ## Contract-side changes
 

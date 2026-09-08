@@ -1,7 +1,9 @@
 # Constructor-only Secp256r1 signer provenance
 
 Status: implemented in `passkey-kit@0.17.0` and smart-wallet `binver = 1.1.0`.
-The hosted Mercury schema-2 response remains pending on 2026-09-01.
+The SDK uses Mercury's schema-2 credential route on supported networks.
+Testnet fixtures verified the response contract on 2026-09-08.
+This check did not independently verify mainnet v2 responses.
 This design supersedes the factory design and all migration designs.
 It does not replace deployer hardening in `mainnet-hardening.md`.
 
@@ -92,10 +94,11 @@ The SDK applies these checks to every untrusted candidate:
 1. Birth verification. See the next section.
 2. The current wallet WASM hash is in `acceptedWasmHashes`.
 3. The credential id identifies a live Secp256r1 signer.
-4. The binding record matches the live signer by identity.
-5. The purpose-specific stored proof verifies for the candidate address and network.
-6. A fresh targeted assertion verifies under the live signer public key.
-7. Exactly one candidate passes every check.
+4. The latest ledger timestamp has not passed the signer's UNIX expiration.
+5. The binding record matches the live signer by identity.
+6. The purpose-specific stored proof verifies for the candidate address and network.
+7. A fresh targeted assertion verifies under the live signer public key.
+8. Exactly one candidate passes every check.
 
 Zero passing candidates fail closed.
 Two or more passing candidates raise `WalletAmbiguousError`.
@@ -165,12 +168,11 @@ Consent for the wrong wallet remains valid consent.
 1. The contract changes are complete.
 2. The canonical WASM and TypeScript bindings are published.
 3. `passkey-kit@0.17.0` includes the security checks.
-4. `passkey-kit@0.17.1` supports the additive dual-field indexer rollout.
+4. The SDK supports Mercury's frozen v2 credential response.
 5. The demo and relayer use the canonical WASM.
-6. The hosted indexer still needs the schema-2 response.
+6. The hosted indexer serves the schema-2 response.
 
-Fresh-device recovery works only after step 6.
-The indexer must deploy the new response before that recovery works.
+Fresh-device recovery still requires a complete and current response.
 
 ## Required tests
 

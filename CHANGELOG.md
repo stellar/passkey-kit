@@ -2,6 +2,19 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.17.3 — 2026-09-08
+
+- **Enabled Mercury v2 credential discovery.** Secp256r1 reverse lookup now
+  uses `GET /api/v2/lookup/:credentialId`. The parser validates Mercury's
+  frozen v2 response fields, incomplete-reason sets, ambiguity, and collision
+  flags. Ed25519 and policy address lookup keeps its existing route.
+- **Rejected expired passkey signers during connection.** `connectWallet`
+  compares a stored Secp256r1 signer's UNIX expiration with the latest ledger
+  close timestamp. The signer stays valid at the expiration timestamp and
+  expires after it.
+- **Kept the contract and bindings unchanged.** These changes affect only the
+  SDK, tests, and documentation.
+
 ## 0.17.2 — 2026-09-04
 
 - **Refused wallet-admin authority on the generic `sign()` path.** `signAuthEntry`
