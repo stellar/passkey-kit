@@ -2,6 +2,15 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.18.2 — 2026-09-08
+
+- **Cleaned the package output before every build.** A publish from a reused
+  worktree can no longer include files left by an older source tree.
+- **Kept the runtime behavior unchanged.** This patch contains the same native
+  relayer client and zero-vulnerability consumer dependency tree as `0.18.1`.
+- **Kept the contract and bindings unchanged.** This patch uses the same wallet
+  WASM, `passkey-kit-sdk@0.9.0`, and `sac-sdk@0.4.4` as `0.18.1`.
+
 ## 0.18.1 — 2026-09-08
 
 - **Removed a vulnerable consumer-only dependency tree.** The server relayer
