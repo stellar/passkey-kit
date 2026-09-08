@@ -39,7 +39,7 @@ pnpm add passkey-kit
 pnpm add @stellar/stellar-sdk
 ```
 
-`@stellar/stellar-sdk` is a **peer dependency** (`>=16.0.0`); the kit targets Protocol 27 smart accounts, which earlier SDKs cannot express.
+`@stellar/stellar-sdk` is a **peer dependency** (`^16.3.0`). The kit targets Protocol 27 smart accounts and the SDK 16 XDR API.
 
 ## Packaging & exports
 

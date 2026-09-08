@@ -14,17 +14,17 @@
     "e2e:audit": "MODE=audit bash ../scripts/e2e/testnet-passkey-smoke.sh"
   },
   "devDependencies": {
-    "@stellar/stellar-sdk": "16.0.1",
+    "@stellar/stellar-sdk": "16.3.0",
     "@sveltejs/vite-plugin-svelte": "^5.1.1",
     "@tsconfig/svelte": "^5.0.8",
     "base64url": "^3.0.1",
     "buffer": "^6.0.3",
     "passkey-kit": "link:..",
-    "svelte": "^5.56.4",
-    "svelte-check": "^4.7.2",
+    "svelte": "^5.57.0",
+    "svelte-check": "^4.7.6",
     "tslib": "^2.8.1",
-    "typescript": "^5.9.2",
-    "vite": "^6.3.6"
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3"
   },
   "pnpm": {
     "overrides": {

@@ -96,6 +96,7 @@ The testnet demo and relayer proxy use this canonical WASM.
 Both services are live on 2026-09-01.
 
 Mercury signer enumeration is live on testnet and mainnet.
-Its hosted lookup route still returns the old response shape.
-Fresh-device discovery fails closed until Mercury deploys schema 2.
+Schema-2 reverse lookup is verified on testnet.
+Mainnet schema-2 responses were not independently verified.
+The SDK requires the schema-2 response and fails closed on incomplete data.
 See [`indexer-signer-provenance-response.md`](./indexer-signer-provenance-response.md).

@@ -7,7 +7,7 @@
  * dependency-injected managers ({@link CredentialManager}, {@link SignerManager},
  * {@link SubmissionManager}) wired here with late-bound closures. All Protocol-27
  * probe shims and dead commented experiments are gone. The kit targets
- * stellar-sdk >= 16 and the current wallet.
+ * stellar-sdk 16.3 and the current wallet.
  *
  * @packageDocumentation
  */

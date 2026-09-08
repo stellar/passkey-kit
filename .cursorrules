@@ -25,7 +25,7 @@ This repo is a **pnpm workspace** (`packages/**`); use `pnpm` for Node tasks.
 |--------|---------|
 | Node.js | 22+ |
 | TypeScript | 5.9, `strict`, `moduleResolution: NodeNext` (explicit `.js` import extensions) |
-| `@stellar/stellar-sdk` | peer dependency `>=16.0.0` |
+| `@stellar/stellar-sdk` | peer dependency `^16.3.0` |
 | Rust (contracts) | pinned in `contracts/rust-toolchain.toml` |
 | `soroban-sdk` | 27.0.0 (`wasm32v1-none`) |
 | Tests | Vitest, co-located `src/*.test.ts` (no config file) |

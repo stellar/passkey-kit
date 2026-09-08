@@ -2,6 +2,21 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## Unreleased
+
+- **Bound the supported Stellar SDK version.** All package peers now require
+  `@stellar/stellar-sdk ^16.3.0`. Stellar SDK 17 changed the XDR API and is not
+  compatible with this release line.
+- **Removed the ignored indexer hardening option.** `MercuryIndexer` now exposes
+  only the live RPC confirmation path. It no longer accepts a compatibility
+  option that could not confirm wallet ownership.
+- **Updated vulnerable transitive dependencies.** The root, demo, and relayer
+  locks now resolve without known npm advisories.
+- **Added dependency audit gates.** CI now audits the root, demo, and relayer
+  dependency trees before it runs tests.
+- **Added an admin-root mismatch regression test.** The signing test now proves
+  that wallet-admin arguments must match the transaction envelope exactly.
+
 ## 0.17.3 — 2026-09-08
 
 - **Enabled Mercury v2 credential discovery.** Secp256r1 reverse lookup now

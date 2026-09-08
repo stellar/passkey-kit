@@ -229,7 +229,7 @@ const kit = new PasskeyKit({ /* … */, storage: new IndexedDBStorage() });
 ## Packaging & imports
 
 - The package now ships **compiled `dist/`** (ESM + `.d.ts`) with an `exports` map. Remove any `transpilePackages: ["passkey-kit", "passkey-factory-sdk", …]` / bundler workaround you added for the old raw-TypeScript shipping.
-- `@stellar/stellar-sdk` is a **peer dependency** (`>=16.0.0`) — install it in your app.
+- `@stellar/stellar-sdk` is a **peer dependency** (`^16.3.0`) — install it in your app.
 - Server-only code moved behind the `passkey-kit/server` subpath. Import `PasskeyServer` from `passkey-kit/server`, not `passkey-kit`, and never from browser code.
 
 ```ts
