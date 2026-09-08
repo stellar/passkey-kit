@@ -1,6 +1,6 @@
 {
   "name": "passkey-kit",
-  "version": "0.18.2",
+  "version": "0.18.3",
   "description": "A helper library for creating and using smart wallet accounts on the Stellar blockchain.",
   "author": "Tyler van der Hoeven <tyler@stellar.org>",
   "license": "MIT",
@@ -42,7 +42,7 @@
     "build:demo": "cd demo && pnpm --ignore-workspace install --frozen-lockfile && pnpm run build",
     "deploy:demo": "npx wrangler pages deploy",
     "deploy:demo:prod": "npx wrangler pages deploy --branch main",
-    "prepublishOnly": "pnpm run verify:bindings && pnpm run build"
+    "prepublishOnly": "node scripts/verify-publish-tool.mjs && pnpm run verify:bindings && pnpm run build"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",

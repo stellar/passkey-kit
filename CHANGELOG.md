@@ -2,6 +2,15 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.18.3 — 2026-09-08
+
+- **Rejected publication through npm CLI.** The release guard now requires
+  `pnpm publish`, which rewrites workspace dependencies to concrete versions.
+- **Replaced the broken `0.18.2` package.** That npm artifact preserved
+  `workspace:*` dependency values and cannot install through npm.
+- **Kept runtime behavior unchanged.** This patch uses the same wallet WASM,
+  `passkey-kit-sdk@0.9.0`, and `sac-sdk@0.4.4` as `0.18.2`.
+
 ## 0.18.2 — 2026-09-08
 
 - **Cleaned the package output before every build.** A publish from a reused

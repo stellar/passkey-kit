@@ -14,7 +14,7 @@ The versions checked into each `package.json` are authoritative; `npm view` is t
 |---|---|
 | `passkey-kit-sdk` | `0.9.0` |
 | `sac-sdk` | `0.4.4` |
-| `passkey-kit` | `0.18.2` (clean package fix — see [CHANGELOG](../CHANGELOG.md)) |
+| `passkey-kit` | `0.18.3` (publish-tool guard — see [CHANGELOG](../CHANGELOG.md)) |
 
 > [!IMPORTANT]
 > Publishing is an **outward-facing, user-gated** step. Bump the versions intentionally, and have the person with npm access run the publish commands (they hold the credentials and the OTP device).
@@ -69,6 +69,9 @@ git status --short
 ```
 
 `pnpm run build` runs `build:bindings`, compiles the SDK to `dist/`, and runs the Node-ESM import smoke test (`verify-esm.mjs`). Commit any intended changes before continuing — publish from a clean tree.
+
+The `prepublishOnly` guard rejects `npm publish`. Only `pnpm publish` rewrites
+the `workspace:*` dependencies to concrete package versions.
 
 Publish only after the release commit is merged and tagged.
 The tag must resolve to the exact commit that produces the package.
