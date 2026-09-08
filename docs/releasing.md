@@ -14,7 +14,7 @@ The versions checked into each `package.json` are authoritative; `npm view` is t
 |---|---|
 | `passkey-kit-sdk` | `0.9.0` |
 | `sac-sdk` | `0.4.4` |
-| `passkey-kit` | `0.17.3` (Mercury v2 discovery — see [CHANGELOG](../CHANGELOG.md)) |
+| `passkey-kit` | `0.18.0` (security closeout — see [CHANGELOG](../CHANGELOG.md)) |
 
 > [!IMPORTANT]
 > Publishing is an **outward-facing, user-gated** step. Bump the versions intentionally, and have the person with npm access run the publish commands (they hold the credentials and the OTP device).
@@ -60,9 +60,9 @@ pnpm run verify:bindings
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm test --run
 pnpm run verify:bindings
 pnpm run build            # build:bindings → tsc → verify-esm
+pnpm test --run           # tests import the built binding packages
 pnpm run build:demo       # ensure the demo still builds against the SDK
 git diff --check
 git status --short
