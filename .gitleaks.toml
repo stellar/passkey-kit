@@ -1,0 +1,50 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public Stellar contract addresses"
+regexTarget = "match"
+regexes = [
+  '''C[A-Z2-7]{55}''',
+]
+
+[[allowlists]]
+description = "Published WebAuthn contract identifiers"
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''(^|/)contracts/Makefile$''',
+]
+regexes = [
+  '''export WEBAUTHN_(FACTORY|WASM)\s*[:?+]?=''',
+]
+
+[[allowlists]]
+description = "Published canonical contract hashes"
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''(^|/)docs/security-deterministic-deployer\.md$''',
+]
+regexes = [
+  '''passkey-kit[^\n]*[0-9a-f]{64}''',
+]
+
+[[allowlists]]
+description = "Relayer test placeholders"
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''(^|/)relayer-proxy/src/index\.test\.ts$''',
+]
+regexes = [
+  '''(gen:|stubFetch).*apiKey:''',
+  '''const DO_KEY\s*=''',
+]
+
+[[allowlists]]
+description = "Generated Stellar SDK bundles"
+paths = [
+  '''(^|/)ext/@stellar/stellar-sdk/dist/''',
+  '''(^|/)demo/src/passkey-kit/index\.js$''',
+]

@@ -16,6 +16,20 @@ All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry cover
   dependency trees before it runs tests.
 - **Added an admin-root mismatch regression test.** The signing test now proves
   that wallet-admin arguments must match the transaction envelope exactly.
+- **Updated safe Cargo dependencies.** The contract lock now uses patched
+  `rand@0.8.8` and `keccak@0.1.6` without changing the canonical wallet WASM.
+- **Documented contract-identity dependency constraints.** The security policy
+  explains why the inactive `time` entry and unused `serde_with::KeyValueMap`
+  path remain until a coordinated contract release.
+- **Hardened contract release automation.** The release workflow now pins its
+  reusable workflow, grants only its required permissions, and uses the
+  requested release name.
+- **Pinned CI actions.** Every CI and release action now uses an immutable
+  commit instead of a movable tag or branch.
+- **Added relayer type checking.** CI now checks the standalone relayer proxy's
+  TypeScript configuration after the root test suite.
+- **Configured secret scanning.** The scanner distinguishes public contract
+  identifiers and test data from expired historical demo credentials.
 
 ## 0.17.3 — 2026-09-08
 
