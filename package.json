@@ -31,7 +31,7 @@
   ],
   "scripts": {
     "sync-version": "node scripts/sync-version.js",
-    "prebuild": "rm -rf dist && node scripts/sync-version.js",
+    "prebuild": "node scripts/clean-dist.mjs && node scripts/sync-version.js",
     "build:bindings": "pnpm --filter sac-sdk run build && pnpm --filter passkey-kit-sdk run build",
     "bindings:regen": "bash scripts/bindings/build.sh",
     "verify:bindings": "bash scripts/bindings/verify.sh",
