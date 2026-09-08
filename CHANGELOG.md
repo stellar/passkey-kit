@@ -8,7 +8,7 @@ All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry cover
   dependencies now use exact package versions instead of workspace protocols.
 - **Added a manifest consistency check.** CI and publication verify that each
   exact dependency matches its workspace package version.
-- **Updated the development test runner.** `vitest@5.0.0` removes the new
+- **Updated the development test runner.** `vitest@4.1.11` removes the new
   `GHSA-82fw-gwwq-j7x9` audit finding. Runtime dependencies are unchanged.
 - **Rejected normal publication through npm CLI.** The release guard still
   requires `pnpm publish` for the documented release process.
