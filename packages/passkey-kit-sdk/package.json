@@ -18,6 +18,7 @@
   ],
   "scripts": {
     "prepublishOnly": "pnpm run build",
+    "prebuild": "node ../../scripts/clean-dist.mjs",
     "build": "tsc"
   },
   "dependencies": {
