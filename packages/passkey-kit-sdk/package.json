@@ -18,6 +18,7 @@
   ],
   "scripts": {
     "prepublishOnly": "pnpm run build",
+    "prebuild": "rm -rf dist",
     "build": "tsc"
   },
   "dependencies": {
