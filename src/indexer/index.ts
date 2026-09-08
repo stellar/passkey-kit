@@ -21,7 +21,6 @@ export type {
   IndexerHealth,
   SignerStatus,
   SignerStorageClass,
-  FindWalletsHardeningDeps,
 } from "./types.js";
 
 export {

@@ -961,7 +961,6 @@ describe("MercuryIndexer.findWallets", () => {
     const indexer = new MercuryIndexer({
       url: BASE,
       rpc: fakeRpc(getLedgerEntries),
-      hardening: { networkPassphrase: TESTNET, deployerPublicKey: DEPLOYER },
     });
 
     const lookup = await indexer.findWallets(SignerKey.Secp256r1(keyId));
@@ -1014,12 +1013,6 @@ describe("MercuryIndexer.findWallets", () => {
       new MercuryIndexer({ url: BASE }).findWallets(SignerKey.Ed25519(ED25519))
     ).rejects.toBeInstanceOf(IndexerError);
 
-    await expect(
-      new MercuryIndexer({
-        url: BASE,
-        hardening: { networkPassphrase: TESTNET, deployerPublicKey: DEPLOYER },
-      }).findWallets(SignerKey.Ed25519(ED25519))
-    ).rejects.toBeInstanceOf(IndexerError);
   });
 
   it("returns an incomplete empty lookup when there are no candidates", async () => {

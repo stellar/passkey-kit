@@ -124,13 +124,3 @@ export interface SignerIndexer {
   /** Probe backend health (degrades to `{ ok: false }` rather than throwing). */
   health(): Promise<IndexerHealth>;
 }
-
-/**
- * @deprecated Retained for source compatibility. Derivation does not confirm
- * wallet ownership, so Mercury ignores these values and requires RPC.
- */
-export interface FindWalletsHardeningDeps {
-  networkPassphrase: string;
-  /** The canonical deployer `G…` public key used for derivation. */
-  deployerPublicKey: string;
-}

@@ -97,7 +97,6 @@ export {
   type IndexerHealth,
   type SignerStatus,
   type SignerStorageClass,
-  type FindWalletsHardeningDeps,
 } from "./indexer/index.js";
 
 // Events

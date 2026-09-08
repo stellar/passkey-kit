@@ -20,7 +20,11 @@ import {
 } from "@stellar/stellar-sdk";
 import type { Spec as ContractSpec } from "@stellar/stellar-sdk/contract";
 import { Client as PasskeyClient } from "passkey-kit-sdk";
-import { signAuthEntry, type SignAuthEntryDeps } from "./tx-ops.js";
+import {
+  assertAdminRootMatchesHostFunction,
+  signAuthEntry,
+  type SignAuthEntryDeps,
+} from "./tx-ops.js";
 import { getAddressCredentials } from "./auth-payload.js";
 import { SigningError } from "../errors.js";
 import type { PreparedSignature, Signer } from "../signers.js";
@@ -334,6 +338,24 @@ describe("signAuthEntry V2 address binding", () => {
     });
     expect(payloads).toHaveLength(1);
     expect(signed.credentials().switch().name).toBe("sorobanCredentialsAddressV2");
+  });
+
+  it("refuses an admin root whose arguments differ from the transaction", () => {
+    const entry = entryWithRoot(
+      WALLET_A,
+      walletInvocation(WALLET_A, "add_signer", [])
+    );
+    const hostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
+      new xdr.InvokeContractArgs({
+        contractAddress: Address.fromString(WALLET_A).toScAddress(),
+        functionName: "add_signer",
+        args: [xdr.ScVal.scvU32(7)],
+      })
+    );
+
+    expect(() =>
+      assertAdminRootMatchesHostFunction(entry, WALLET_A, hostFunction)
+    ).toThrow(SigningError);
   });
 
   it("still signs a benign tree with no nested wallet-admin call", async () => {

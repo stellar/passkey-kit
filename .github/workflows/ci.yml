@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   contracts:
     name: contract tests
@@ -60,6 +63,17 @@ jobs:
       - name: Install relayer-proxy dependencies
         working-directory: relayer-proxy
         run: pnpm install --frozen-lockfile --ignore-workspace
+
+      - name: Audit root dependencies
+        run: pnpm audit
+
+      - name: Audit demo dependencies
+        working-directory: demo
+        run: pnpm audit --ignore-workspace
+
+      - name: Audit relayer-proxy dependencies
+        working-directory: relayer-proxy
+        run: pnpm audit --ignore-workspace
 
       # Build BEFORE test: the tests import the generated bindings package by
       # name, which only resolves once its dist/ exists.

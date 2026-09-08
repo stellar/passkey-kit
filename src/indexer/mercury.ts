@@ -33,7 +33,6 @@ import { getSigner } from "../kit/wallet-ops.js";
 import { contractDataExists } from "../rpc-data.js";
 import base64url from "../base64url.js";
 import type {
-  FindWalletsHardeningDeps,
   IncompleteWalletCandidate,
   IndexerHealth,
   SignerIndexer,
@@ -164,10 +163,6 @@ export interface MercuryIndexerConfig {
    * `findWallets` confirm reverse-lookup candidates on-chain.
    */
   rpc?: Server;
-  /**
-   * @deprecated Derivation no longer confirms wallet ownership. Configure `rpc`.
-   */
-  hardening?: FindWalletsHardeningDeps;
   /** Injectable fetch (tests / non-global runtimes). Defaults to global `fetch`. */
   fetch?: typeof fetch;
 }
