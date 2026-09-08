@@ -108,7 +108,11 @@ class ChannelsClient {
   private readonly timeout: number;
 
   constructor(config: RelayerClientConfig) {
-    this.endpoint = `${config.baseUrl.replace(/\/+$/, "")}/`;
+    let endpointEnd = config.baseUrl.length;
+    while (endpointEnd > 0 && config.baseUrl[endpointEnd - 1] === "/") {
+      endpointEnd -= 1;
+    }
+    this.endpoint = `${config.baseUrl.slice(0, endpointEnd)}/`;
     this.apiKey = config.apiKey;
     this.timeout = config.timeout ?? DEFAULT_RELAYER_TIMEOUT_MS;
   }

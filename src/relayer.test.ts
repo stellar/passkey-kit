@@ -34,7 +34,7 @@ describe("RelayerClient.send", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const relayer = new RelayerClient({
-      baseUrl: "https://relayer.test/service",
+      baseUrl: "https://relayer.test/service///",
       apiKey: "secret",
     });
 
