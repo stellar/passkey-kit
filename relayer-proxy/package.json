@@ -24,6 +24,7 @@
   },
   "pnpm": {
     "overrides": {
+      "sharp": "0.35.4",
       "toml": "4.2.0"
     }
   }
