@@ -2,6 +2,13 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## Unreleased
+
+- **Updated the relayer development image dependency.** The standalone relayer
+  lock now requires `sharp@0.35.4`, which removes the development-only
+  `GHSA-rgj7-g3m4-5g8c` alert. This change does not affect the published package
+  or the deployed Worker runtime.
+
 ## 0.18.3 — 2026-09-08
 
 - **Made dependency fields independent of the publish tool.** Runtime
