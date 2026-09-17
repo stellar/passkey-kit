@@ -159,3 +159,44 @@ export const MERCURY_PASSKEY_INDEXER_URLS = {
 
 /** Stellar Friendbot URL for testnet funding. */
 export const FRIENDBOT_URL = "https://friendbot.stellar.org";
+
+// ============================================================================
+// Legacy (pre-1.0) wallet code identities
+// ============================================================================
+
+/**
+ * Mainnet smart-wallet WASM hashes whose `update_signer` has no authorization
+ * check (fixed in source by commit dcc6e3dc9c, 2025-03-27). Any signer on a
+ * wallet running one of these can be overwritten by anyone. The kit refuses to
+ * deploy from them and names them in {@link LegacyWalletError} on connect.
+ * See SECURITY.md and docs/legacy-wallet-upgrade.md.
+ */
+export const KNOWN_VULNERABLE_WALLET_WASM_HASHES: readonly string[] = [
+  "0c0a264d4cc0b3e79b8533e2a2e1f0ed21501a5a3f9f2455d2f18c232940b865",
+  "19868df3653d427cafa1c30bdb6cec1ca5c8c815eeabab8a8bae6d83efb1fedd",
+  "b62f62217ff256d557513793e9e44317b25b14401a8a6b6149a04d38d72d6c7c",
+  "c5509dfa5f022deb8ae621f073adac5fd788feca0b24d15b5f392ab22c2ff222",
+];
+
+/**
+ * Patched pre-1.0 smart-wallet WASM hashes. Wallets on these are not
+ * vulnerable but predate the v1 contract, so this kit cannot connect to them;
+ * the 0.10.20–0.12.x kit line can.
+ */
+export const LEGACY_WALLET_WASM_HASHES: readonly string[] = [
+  "ecd990f0b45ca6817149b6175f79b32efb442f35731985a084131e8265c4cd90",
+  "e45c42b944a767bd5f37f8c4a469b48917d28e23481dbfd550419c84cdacde92",
+  "c079d3a4136eb6ca68eb724acd3d8af11b0be4a0ed82605925a6dfd4dd83a97c",
+];
+
+/**
+ * The in-place upgrade target for every vulnerable legacy wallet. Built from
+ * `contracts-legacy/`; it reads both pre-1.0 storage layouts, which the other
+ * patched builds do not (they brick `0c0a264d…`/`19868df3…` wallets).
+ */
+export const LEGACY_UPGRADE_TARGET_WASM_HASH =
+  "c079d3a4136eb6ca68eb724acd3d8af11b0be4a0ed82605925a6dfd4dd83a97c";
+
+/** Operator guide for upgrading legacy wallets in place. */
+export const LEGACY_WALLET_UPGRADE_GUIDE_URL =
+  "https://github.com/stellar/passkey-kit/blob/main/docs/legacy-wallet-upgrade.md";

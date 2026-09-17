@@ -31,7 +31,17 @@ import { Api } from "@stellar/stellar-sdk/rpc";
 import { PasskeyKit, type PasskeyKitConfig } from "./kit.js";
 import { SignerStore, type StoredPasskey } from "./types.js";
 import { MemoryStorage } from "./storage/memory.js";
-import { ConfigurationError, WalletAmbiguousError, WalletOwnershipError } from "./errors.js";
+import {
+  ConfigurationError,
+  LegacyWalletError,
+  WalletAmbiguousError,
+  WalletOwnershipError,
+} from "./errors.js";
+import {
+  KNOWN_VULNERABLE_WALLET_WASM_HASHES,
+  LEGACY_UPGRADE_TARGET_WASM_HASH,
+  LEGACY_WALLET_WASM_HASHES,
+} from "./constants.js";
 import base64url from "./base64url.js";
 
 const WASM_HASH = "ab".repeat(32); // accepted birth + current code
@@ -652,5 +662,121 @@ describe("addSecp256r1 persistence", () => {
     await expect(
       kit.addSecp256r1(NEW_KEY, NEW_PUB, undefined as never, SignerStore.Persistent)
     ).rejects.toBeInstanceOf(WalletOwnershipError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Legacy (pre-1.0) wallet code
+// ---------------------------------------------------------------------------
+
+describe("legacy wallet code", () => {
+  const VULNERABLE = KNOWN_VULNERABLE_WALLET_WASM_HASHES[0]!;
+  const PATCHED_LEGACY = LEGACY_WALLET_WASM_HASHES[0]!;
+  let birth: Birth;
+
+  beforeEach(() => {
+    birth = makeBirth(0x31, WASM_HASH, 40);
+  });
+
+  it("refuses to be configured with a known-vulnerable walletWasmHash", () => {
+    const error = (() => {
+      try {
+        makeKit(undefined, { walletWasmHash: VULNERABLE });
+        return undefined;
+      } catch (caught) {
+        return caught;
+      }
+    })();
+    expect(error).toBeInstanceOf(ConfigurationError);
+    expect((error as ConfigurationError).message).toContain(LEGACY_UPGRADE_TARGET_WASM_HASH);
+  });
+
+  it("refuses a known-vulnerable hash in acceptedWasmHashes", () => {
+    expect(() =>
+      makeKit(undefined, { acceptedWasmHashes: [WASM_HASH, VULNERABLE.toUpperCase()] })
+    ).toThrow(ConfigurationError);
+  });
+
+  it("names the upgrade path when the only candidate runs vulnerable code", async () => {
+    const kit = makeKit();
+    stubProvenance(kit);
+    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
+      instanceWithWasm(VULNERABLE) as never
+    );
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
+
+    const error = await kit
+      .connectWallet({
+        keyId: KEY_ID_B64,
+        getWalletCandidates: async () => completeLookup([birth], 40),
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(LegacyWalletError);
+    const legacy = error as LegacyWalletError;
+    expect(legacy.vulnerable).toBe(true);
+    expect(legacy.wasmHash).toBe(VULNERABLE);
+    expect(legacy.upgradeTarget).toBe(LEGACY_UPGRADE_TARGET_WASM_HASH);
+    expect(legacy.message).toContain("update_contract_code");
+    expect(legacy.message).toContain(LEGACY_UPGRADE_TARGET_WASM_HASH);
+    expect(legacy.message).toContain("legacy-wallet-upgrade.md");
+    expect(legacy.context).toMatchObject({ contractId: birth.contractId, vulnerable: true });
+    expect(kit.wallet).toBeUndefined();
+  });
+
+  it("names the legacy kit line when the candidate runs patched legacy code", async () => {
+    const kit = makeKit();
+    stubProvenance(kit);
+    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
+      instanceWithWasm(PATCHED_LEGACY) as never
+    );
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
+
+    const error = await kit
+      .connectWallet({
+        keyId: KEY_ID_B64,
+        getWalletCandidates: async () => completeLookup([birth], 40),
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(LegacyWalletError);
+    expect((error as LegacyWalletError).vulnerable).toBe(false);
+    expect((error as LegacyWalletError).message).toContain("0.10.20");
+  });
+
+  it("prefers the legacy error over a generic mismatch when nothing verifies", async () => {
+    const kit = makeKit();
+    stubProvenance(kit);
+    const evilBirth = makeBirth(9, EVIL_HASH, 20);
+    // First candidate: unaccepted birth (generic mismatch). Second: vulnerable code.
+    vi.spyOn(kit.rpc, "getContractData").mockImplementation((async (id: string) =>
+      instanceWithWasm(id === evilBirth.contractId ? WASM_HASH : VULNERABLE)) as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(txStub([evilBirth, birth]) as never);
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
+
+    const error = await kit
+      .connectWallet({
+        keyId: KEY_ID_B64,
+        getWalletCandidates: async () => completeLookup([evilBirth, birth], 40),
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(LegacyWalletError);
+  });
+
+  it("still connects a v1 wallet when a legacy sibling shares the passkey", async () => {
+    const kit = makeKit();
+    stubProvenance(kit);
+    const legacyBirth = makeBirth(8, WASM_HASH, 21);
+    vi.spyOn(kit.rpc, "getContractData").mockImplementation((async (id: string) =>
+      instanceWithWasm(id === legacyBirth.contractId ? VULNERABLE : WASM_HASH)) as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(txStub([legacyBirth, birth]) as never);
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({ sequence: 40 } as never);
+
+    const result = await kit.connectWallet({
+      keyId: KEY_ID_B64,
+      getWalletCandidates: async () => completeLookup([legacyBirth, birth], 40),
+    });
+    expect(result.contractId).toBe(birth.contractId);
   });
 });

@@ -38,6 +38,47 @@ jobs:
         working-directory: contracts
         run: cargo test --workspace --locked
 
+  contracts-legacy:
+    name: legacy contract tests + canonical hash
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: 1.89.0
+          targets: wasm32v1-none
+          components: rustfmt
+
+      - name: Check legacy contract formatting
+        working-directory: contracts-legacy
+        run: cargo fmt --all -- --check
+
+      # The committed artifact is the upgrade target published in SECURITY.md
+      # and docs/legacy-wallet-upgrade.md. Its hash must not drift, and the
+      # end-to-end tests run against exactly those bytes.
+      - name: Verify the canonical artifact and run the tests
+        working-directory: contracts-legacy
+        run: make test
+
+      # Informational: rebuild on this host and report. rustc's wasm codegen is
+      # host-dependent, so this hash is not expected to equal the canonical one;
+      # the step exists so a source change that silently alters the contract is
+      # visible in the log.
+      - name: Install stellar CLI 27.1.0
+        run: |
+          set -euo pipefail
+          curl -fsSL -o stellar-cli.tar.gz \
+            https://github.com/stellar/stellar-cli/releases/download/v27.1.0/stellar-cli-27.1.0-x86_64-unknown-linux-gnu.tar.gz
+          tar -xzf stellar-cli.tar.gz
+          sudo install -m 0755 stellar /usr/local/bin/stellar
+
+      - name: Rebuild on this host (informational)
+        working-directory: contracts-legacy
+        run: |
+          stellar contract build --locked --package smart-wallet --out-dir rebuilt
+          shasum -a 256 rebuilt/smart_wallet.wasm out/smart_wallet.wasm
+
   build:
     name: test & build
     runs-on: ubuntu-latest

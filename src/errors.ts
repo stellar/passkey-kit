@@ -40,6 +40,8 @@ export enum PasskeyKitErrorCode {
   WALLET_NOT_FOUND = 2003,
   WALLET_OWNERSHIP_MISMATCH = 2004,
   WALLET_AMBIGUOUS = 2005,
+  /** The wallet runs pre-1.0 contract code; see {@link LegacyWalletError}. */
+  WALLET_LEGACY_CODE = 2006,
 
   // WebAuthn (3xxx)
   WEBAUTHN_REGISTRATION_FAILED = 3001,
@@ -169,6 +171,55 @@ export class WalletOwnershipError extends PasskeyKitError {
   constructor(message: string, context?: Record<string, unknown>) {
     super(message, PasskeyKitErrorCode.WALLET_OWNERSHIP_MISMATCH, { context });
     this.name = "WalletOwnershipError";
+  }
+}
+
+/**
+ * Thrown when a wallet runs pre-1.0 (legacy) contract code, which this kit
+ * cannot operate. Two cases, distinguished by {@link LegacyWalletError.vulnerable}:
+ *
+ * - `vulnerable: true` — the code is one of the known-vulnerable builds whose
+ *   `update_signer` has no authorization check. Anyone can take the wallet
+ *   over. It must be upgraded in place to {@link upgradeTarget} (or drained)
+ *   using the 0.10.20–0.12.x kit line; see {@link guideUrl}.
+ * - `vulnerable: false` — the code is a patched legacy build. The wallet is
+ *   safe but only the 0.10.20–0.12.x kit line can connect to it.
+ */
+export class LegacyWalletError extends PasskeyKitError {
+  /** The wallet's current code hash (hex). */
+  readonly wasmHash: string;
+  /** Whether the code has the unauthenticated `update_signer` defect. */
+  readonly vulnerable: boolean;
+  /** WASM hash to upgrade to in place (safe for every legacy layout). */
+  readonly upgradeTarget: string;
+  /** Operator guide for the upgrade. */
+  readonly guideUrl: string;
+
+  constructor(options: {
+    contractId: string;
+    wasmHash: string;
+    vulnerable: boolean;
+    upgradeTarget: string;
+    guideUrl: string;
+  }) {
+    const { contractId, wasmHash, vulnerable, upgradeTarget, guideUrl } = options;
+    const message = vulnerable
+      ? `Wallet ${contractId} runs known-vulnerable legacy code ${wasmHash.slice(0, 8)}…: ` +
+        `its update_signer has no authorization check, so anyone can take the wallet over. ` +
+        `Upgrade it in place to ${upgradeTarget} with the passkey-kit 0.10.20–0.12.x line ` +
+        `(update_contract_code, then migrate_signers), or move its funds out. ` +
+        `This kit version cannot connect to it. Guide: ${guideUrl}`
+      : `Wallet ${contractId} runs patched legacy code ${wasmHash.slice(0, 8)}…, ` +
+        `which this kit version cannot connect to. Use the passkey-kit 0.10.20–0.12.x ` +
+        `line for this wallet. Guide: ${guideUrl}`;
+    super(message, PasskeyKitErrorCode.WALLET_LEGACY_CODE, {
+      context: { contractId, wasmHash, vulnerable, upgradeTarget, guideUrl },
+    });
+    this.name = "LegacyWalletError";
+    this.wasmHash = wasmHash;
+    this.vulnerable = vulnerable;
+    this.upgradeTarget = upgradeTarget;
+    this.guideUrl = guideUrl;
   }
 }
 

@@ -47,10 +47,17 @@ import {
   WalletNotConnectedError,
   WalletOwnershipError,
   WalletAmbiguousError,
+  LegacyWalletError,
 } from "./errors.js";
 import { PasskeyEventEmitter } from "./events.js";
 import { isDefaultDeployer } from "./utils.js";
-import { DEFAULT_TIMEOUT_SECONDS } from "./constants.js";
+import {
+  DEFAULT_TIMEOUT_SECONDS,
+  KNOWN_VULNERABLE_WALLET_WASM_HASHES,
+  LEGACY_UPGRADE_TARGET_WASM_HASH,
+  LEGACY_WALLET_UPGRADE_GUIDE_URL,
+  LEGACY_WALLET_WASM_HASHES,
+} from "./constants.js";
 import { PasskeySigner, type Signer, type SignerContext } from "./signers.js";
 import type { WebAuthnClient } from "./kit/webauthn-ops.js";
 import type { CreatedPasskey } from "./kit/webauthn-ops.js";
@@ -205,6 +212,22 @@ export class PasskeyKit {
         "walletWasmHash is required",
         PasskeyKitErrorCode.MISSING_CONFIG
       );
+    }
+    for (const configured of [
+      config.walletWasmHash,
+      ...(config.acceptedWasmHashes ?? []),
+      ...(config.acceptedBirthWasmHashes ?? []),
+    ]) {
+      if (KNOWN_VULNERABLE_WALLET_WASM_HASHES.includes(configured.toLowerCase())) {
+        throw new ConfigurationError(
+          `walletWasmHash ${configured.slice(0, 8)}… is a known-vulnerable legacy build ` +
+            `(update_signer has no authorization check). Do not deploy from it or accept it. ` +
+            `Existing wallets on it must upgrade to ${LEGACY_UPGRADE_TARGET_WASM_HASH}; ` +
+            `see ${LEGACY_WALLET_UPGRADE_GUIDE_URL}`,
+          PasskeyKitErrorCode.INVALID_CONFIG,
+          { wasmHash: configured.toLowerCase() }
+        );
+      }
     }
 
     this.rpc = new Server(config.rpcUrl);
@@ -530,6 +553,9 @@ export class PasskeyKit {
     // The last definitive rejection, rethrown verbatim when nothing verifies so
     // its context (e.g. the rejected wasm hash) is not replaced by a summary.
     let lastMismatch: WalletOwnershipError | undefined;
+    // A candidate on pre-1.0 code is a definitive answer with its own guidance.
+    // It is reported in preference to any generic mismatch when nothing verifies.
+    let legacyMismatch: LegacyWalletError | undefined;
 
     for (const candidate of candidates) {
       const wallet = new PasskeyClient({
@@ -541,6 +567,10 @@ export class PasskeyKit {
       this.keyId = keyIdBase64;
 
       try {
+        // Before birth verification: a legacy wallet fails that check for
+        // reasons that would hide the real problem (no constructor birth, an
+        // unaccepted hash). Name the legacy code and the upgrade path instead.
+        await this.assertNotLegacyWallet(candidate.contractId);
         const birth = await verifyWalletBirth(
           {
             rpc: this.rpc,
@@ -615,6 +645,10 @@ export class PasskeyKit {
       } catch (err) {
         this.wallet = undefined;
         this.keyId = undefined;
+        if (err instanceof LegacyWalletError) {
+          legacyMismatch = err;
+          continue;
+        }
         if (err instanceof WalletOwnershipError) {
           lastMismatch = err;
           continue;
@@ -628,6 +662,7 @@ export class PasskeyKit {
 
     if (verified.size === 0) {
       throw (
+        legacyMismatch ??
         lastMismatch ??
         new WalletOwnershipError(
           "The passkey is not a signer on any resolved wallet",
@@ -659,6 +694,27 @@ export class PasskeyKit {
     this.events.emit("walletConnected", { contractId, keyId: keyIdBase64 });
 
     return { rawResponse, keyId: keyIdBuffer, keyIdBase64, contractId };
+  }
+
+  /**
+   * Reject a wallet whose current code is a pre-1.0 build, with guidance.
+   * Known-vulnerable builds get the upgrade instructions; patched legacy
+   * builds get the "use the 0.10.20–0.12.x kit" instruction. Accepted hashes
+   * are never legacy, so an integrator cannot opt into a vulnerable build.
+   */
+  private async assertNotLegacyWallet(contractId: string): Promise<void> {
+    const wasmHash = await this.contractWasmHash(contractId);
+    const vulnerable = KNOWN_VULNERABLE_WALLET_WASM_HASHES.includes(wasmHash);
+    if (!vulnerable && !LEGACY_WALLET_WASM_HASHES.includes(wasmHash)) {
+      return;
+    }
+    throw new LegacyWalletError({
+      contractId,
+      wasmHash,
+      vulnerable,
+      upgradeTarget: LEGACY_UPGRADE_TARGET_WASM_HASH,
+      guideUrl: LEGACY_WALLET_UPGRADE_GUIDE_URL,
+    });
   }
 
   private async assertWalletWasmHash(contractId: string): Promise<void> {
