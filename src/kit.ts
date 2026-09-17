@@ -43,6 +43,7 @@ import {
 import {
   ConfigurationError,
   PasskeyKitError,
+  ValidationError,
   PasskeyKitErrorCode,
   WalletNotConnectedError,
   WalletOwnershipError,
@@ -69,6 +70,14 @@ import {
   SubmissionManager,
 } from "./managers/index.js";
 import { resolveDeployer } from "./kit/deploy-ops.js";
+import {
+  buildLegacyMigrateTx,
+  buildLegacyUpgradeTx,
+  inspectLegacyWallet,
+  signLegacyUpgradeTx,
+  type LegacyWalletInspection,
+} from "./kit/legacy-ops.js";
+import { restoreFootprint } from "./kit/tx-ops.js";
 import {
   buildSecp256r1Signer,
   type PolicySignerTxOptions,
@@ -173,6 +182,8 @@ export class PasskeyKit {
   readonly acceptedWasmHashes: readonly string[];
   /** Accepted immutable birth code identities, lowercase hex. Never empty. */
   readonly acceptedBirthWasmHashes: readonly string[];
+  /** Funded key used only for footprint restores, when configured. */
+  private readonly restoreKeypair?: Keypair;
   /** Full-history source for immutable wallet-birth verification. */
   readonly history?: Horizon.Server;
   readonly rpId?: string;
@@ -301,6 +312,8 @@ export class PasskeyKit {
       calculateExpiration: () =>
         calculateExpiration({ rpc: this.rpc, timeoutInSeconds: this.timeoutInSeconds }),
     });
+
+    this.restoreKeypair = restoreKeypair;
 
     this.submissionManager = new SubmissionManager({
       rpc: this.rpc,
@@ -909,6 +922,144 @@ export class PasskeyKit {
     if (contractId) {
       this.events.emit("walletDisconnected", { contractId });
     }
+  }
+
+  // -- Legacy (pre-1.0) wallet upgrade ------------------------------------------
+
+  /**
+   * Inspect a wallet this kit cannot connect to and say what it needs:
+   * its code status (vulnerable / legacy / current / unknown), its storage
+   * cohort, which ledger entries are archived, and a plain recommendation.
+   * Read-only.
+   */
+  inspectLegacyWallet(contractId: string): Promise<LegacyWalletInspection> {
+    return inspectLegacyWallet(
+      {
+        rpc: this.rpc,
+        acceptedWasmHashes: this.acceptedWasmHashes,
+        contractWasmHash: (id) => this.contractWasmHash(id),
+      },
+      contractId
+    );
+  }
+
+  private legacyTxDeps(contractId: string) {
+    return {
+      rpcUrl: this.rpcUrl,
+      networkPassphrase: this.networkPassphrase,
+      timeoutInSeconds: this.timeoutInSeconds,
+      spec: new PasskeyClient({
+        contractId,
+        rpcUrl: this.rpcUrl,
+        networkPassphrase: this.networkPassphrase,
+      }).spec,
+    };
+  }
+
+  /**
+   * Restore archived entries a simulated transaction needs, using the
+   * configured `restoreSource`, and rebuild. Throws with guidance when no
+   * restore source is configured.
+   */
+  private async withRestore<T>(
+    build: () => Promise<AssembledTransaction<T>>,
+    contractId: string
+  ): Promise<AssembledTransaction<T>> {
+    let tx = await build();
+    const simulation = tx.simulation;
+    if (simulation && Api.isSimulationRestore(simulation)) {
+      if (!this.restoreKeypair) {
+        throw new PasskeyKitError(
+          `Wallet ${contractId} has archived ledger entries that must be restored before this ` +
+            `call can run. Configure \`restoreSource\` (a funded key) on the kit, or submit a ` +
+            `RestoreFootprint operation yourself, then retry.`,
+          PasskeyKitErrorCode.RESTORE_REQUIRED,
+          { context: { contractId } }
+        );
+      }
+      await restoreFootprint(
+        {
+          rpc: this.rpc,
+          networkPassphrase: this.networkPassphrase,
+          sourceKeypair: this.restoreKeypair,
+          timeoutInSeconds: this.timeoutInSeconds,
+        },
+        simulation.restorePreamble
+      );
+      tx = await build();
+    }
+    return tx;
+  }
+
+  /**
+   * Build the in-place upgrade for a pre-1.0 wallet:
+   * `update_contract_code(<legacy-line target>)`, authorized by the wallet.
+   * Refuses wallets that are not on a known pre-1.0 build. Restores archived
+   * entries first when `restoreSource` is configured.
+   *
+   * Sign it with {@link signLegacyUpgradeTx} and submit through
+   * `PasskeyServer.send` (or your own funded source).
+   */
+  async buildLegacyUpgradeTx(
+    contractId: string
+  ): Promise<{ inspection: LegacyWalletInspection; tx: AssembledTransaction<null> }> {
+    const inspection = await this.inspectLegacyWallet(contractId);
+    if (inspection.status !== "vulnerable" && inspection.status !== "legacy") {
+      throw new ValidationError(
+        `Wallet ${contractId} is not on a known pre-1.0 build (${inspection.status}); ` +
+          `there is no legacy upgrade to build. ${inspection.recommendation}`,
+        PasskeyKitErrorCode.INVALID_INPUT,
+        { contractId, wasmHash: inspection.wasmHash, status: inspection.status }
+      );
+    }
+    const tx = await this.withRestore(
+      () => buildLegacyUpgradeTx(this.legacyTxDeps(contractId), contractId, inspection.upgradeTarget),
+      contractId
+    );
+    return { inspection, tx };
+  }
+
+  /**
+   * Build `migrate_signers(keys)` for a wallet already upgraded to the
+   * legacy-line target. Needs no wallet authorization; any funded source can
+   * submit it. Get the keys from `PasskeyServer.getSigners` /
+   * `MercuryIndexer.getSigners`.
+   */
+  buildLegacyMigrateTx(
+    contractId: string,
+    signerKeys: readonly SignerKey[]
+  ): Promise<AssembledTransaction<number>> {
+    return this.withRestore(
+      () => buildLegacyMigrateTx(this.legacyTxDeps(contractId), contractId, signerKeys),
+      contractId
+    );
+  }
+
+  /**
+   * Sign a legacy wallet's upgrade transaction with one of its existing
+   * signers, without connecting. Defaults to a discoverable passkey prompt;
+   * pass `new PasskeySigner(keyId)` to require a specific credential, or an
+   * `Ed25519Signer`.
+   */
+  signLegacyUpgradeTx<T>(
+    tx: AssembledTransaction<T>,
+    contractId: string,
+    signer: Signer = new PasskeySigner("any"),
+    options?: Omit<SignOptions, "allowWalletReentry">
+  ): Promise<AssembledTransaction<T>> {
+    return signLegacyUpgradeTx(
+      {
+        networkPassphrase: this.networkPassphrase,
+        spec: this.legacyTxDeps(contractId).spec,
+        signerContext: this.signerContext(),
+        calculateExpiration: () =>
+          calculateExpiration({ rpc: this.rpc, timeoutInSeconds: this.timeoutInSeconds }),
+        contractId,
+      },
+      tx,
+      signer,
+      options
+    );
   }
 
   // -- Signing -----------------------------------------------------------------

@@ -64,7 +64,7 @@ on every subsequent call. The wallet is bricked and its funds are locked.
 | Source | `contracts-legacy/` (soroban-sdk 23.0.2, Rust 1.89, `wasm32v1-none`) |
 | Canonical artifact | `contracts-legacy/out/smart_wallet.wasm`, committed. CI asserts its hash and runs the tests against it. Built with Rust 1.89 and stellar CLI 27.1.0 on macOS aarch64. `stellar contract build` remaps source paths, but rustc's wasm codegen differs across host platforms, so a rebuild on another host is functionally equivalent with a different hash. Doc comments on exported functions are embedded in the contract spec, so editing them also changes the hash. |
 | Testnet upload | tx `ae5e9439ad044b6c6d3cb491ff6f0e5bd60cfcc1eefbc8a56cc6f1f89b93acaf` |
-| Mainnet upload | not yet uploaded |
+| Mainnet upload | tx `501bd5d5d06ac131e7da213fb29f59b6338332e1bc8900705017dab396102c72` (2026-09-17) |
 | Verify / test | `cd contracts-legacy && make verify` / `make test` |
 
 The tests load the real mainnet `0c0a264d…`, `b62f6221…`, and `c5509dfa…`
@@ -111,7 +111,7 @@ strict build if its operator chooses to.
 ### With the stellar CLI
 
 ```bash
-# once per network: upload the code. As of 2026-09-17 it is on testnet only.
+# once per network: upload the code. It is live on testnet and mainnet as of 2026-09-17.
 stellar contract upload --wasm contracts-legacy/out/smart_wallet.wasm \
   --source <funded-key> --network mainnet
 
@@ -141,13 +141,43 @@ connect to these wallets and cannot be used for this step.
 ## What the current kit does with a legacy wallet
 
 `passkey-kit` `0.19.0` and later cannot operate a pre-1.0 wallet, but it
-recognizes one. `connectWallet` throws `LegacyWalletError` (code `2006`)
-before birth verification when a candidate's current code is one of the
-four vulnerable hashes or a patched legacy build. The error's `vulnerable`
-flag, `upgradeTarget`, and `guideUrl` fields carry this document's guidance,
-and its message says what to do. The constructor also refuses a
-known-vulnerable `walletWasmHash`, so no new wallet can be deployed from one.
-Perform the upgrade itself with the 0.10.20–0.12.x kit line.
+recognizes one and can craft its upgrade.
+
+- `connectWallet` throws `LegacyWalletError` (code `2006`) before birth
+  verification when a candidate's current code is one of the four vulnerable
+  hashes or a patched legacy build. The error's `vulnerable` flag,
+  `upgradeTarget`, and `guideUrl` fields carry this document's guidance, and
+  its message says what to do. The constructor also refuses a
+  known-vulnerable `walletWasmHash`, so no new wallet can be deployed from one.
+- `inspectLegacyWallet(contractId)` reads the wallet's code hash and the
+  liveness of its instance, current-code, and target-code entries, and returns
+  the status, the storage cohort, which entries are archived, and a
+  recommendation. Read-only.
+- `buildLegacyUpgradeTx(contractId)` builds `update_contract_code(<target>)`
+  for a wallet on a pre-1.0 build. When `restoreSource` is configured it
+  restores archived entries first; otherwise it throws `RESTORE_REQUIRED`
+  with guidance.
+- `signLegacyUpgradeTx(tx, contractId, signer?)` signs the wallet's auth
+  entry with one of its existing signers, without connecting. The default is
+  a discoverable passkey prompt; pass `new PasskeySigner(keyId)` for a
+  specific credential or an `Ed25519Signer`.
+- `buildLegacyMigrateTx(contractId, signerKeys)` builds `migrate_signers`
+  for the bare cohort after the upgrade. Get the keys from
+  `PasskeyServer.getSigners` or `MercuryIndexer.getSigners`.
+
+```ts
+const { inspection, tx } = await kit.buildLegacyUpgradeTx(contractId);
+if (inspection.upgradeRequired) {
+  const signed = await kit.signLegacyUpgradeTx(tx, contractId, new PasskeySigner(keyId));
+  await server.send(signed);
+  if (inspection.migrateRequired) {
+    const keys = (await server.getSigners(contractId)).map((s) => s.key);
+    await server.send(await kit.buildLegacyMigrateTx(contractId, keys));
+  }
+}
+```
+
+The 0.10.20–0.12.x kit line still works for the same steps if you prefer it.
 
 ## Client compatibility after the upgrade
 
