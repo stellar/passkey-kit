@@ -186,7 +186,7 @@ export const KNOWN_VULNERABLE_WALLET_WASM_HASHES: readonly string[] = [
 export const LEGACY_WALLET_WASM_HASHES: readonly string[] = [
   "ecd990f0b45ca6817149b6175f79b32efb442f35731985a084131e8265c4cd90",
   "e45c42b944a767bd5f37f8c4a469b48917d28e23481dbfd550419c84cdacde92",
-  "1c0915fbf780a47465ece4c614596f3fab640dbed80d7d6a82f6cb1b580c6d02",
+  "c079d3a4136eb6ca68eb724acd3d8af11b0be4a0ed82605925a6dfd4dd83a97c",
 ];
 
 /**
@@ -195,7 +195,7 @@ export const LEGACY_WALLET_WASM_HASHES: readonly string[] = [
  * patched builds do not (they brick `0c0a264d…`/`19868df3…` wallets).
  */
 export const LEGACY_UPGRADE_TARGET_WASM_HASH =
-  "1c0915fbf780a47465ece4c614596f3fab640dbed80d7d6a82f6cb1b580c6d02";
+  "c079d3a4136eb6ca68eb724acd3d8af11b0be4a0ed82605925a6dfd4dd83a97c";
 
 /** Operator guide for upgrading legacy wallets in place. */
 export const LEGACY_WALLET_UPGRADE_GUIDE_URL =

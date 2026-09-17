@@ -1,27 +1,28 @@
 # Legacy-line smart wallet. Separate workspace from ../contracts (v1).
 # Requires the toolchain in ./rust-toolchain.toml (Rust 1.89, wasm32v1-none)
-# and the stellar CLI for `optimize`.
+# and the stellar CLI (27.x). `stellar contract build` remaps source paths and
+# optimizes by default, so the hash is reproducible across machines; a plain
+# `cargo build` embeds absolute paths (panic locations) and is NOT.
 
-WASM_DIR = target/wasm32v1-none/release
-WASM     = $(WASM_DIR)/smart_wallet.wasm
-OPT      = $(WASM_DIR)/smart_wallet.optimized.wasm
+WASM = out/smart_wallet.wasm
 
-.PHONY: build optimize hash test clean
+.PHONY: build hash test fmt clean
 
 build:
-	cargo build --locked --target wasm32v1-none --release -p smart-wallet
+	rm -rf out/
+	stellar contract build --locked --package smart-wallet --out-dir out
 
-optimize: build
-	stellar contract optimize --wasm $(WASM) --wasm-out $(OPT)
-
-hash: optimize
-	@shasum -a 256 $(OPT)
+hash: build
+	@shasum -a 256 $(WASM)
 
 # The end-to-end tests upgrade real pre-fix wallets (the mainnet WASM under
-# smart-wallet/src/tests/fixtures) to the freshly built WASM, and one of them
-# uses the OPTIMIZED artifact (the bytes that ship), so `optimize` runs first.
-test: optimize
+# smart-wallet/src/tests/fixtures) to the artifact that ships, so `build` runs first.
+test: build
 	cargo test --locked -p smart-wallet -- --nocapture
 
+fmt:
+	cargo fmt --all
+
 clean:
+	rm -rf out/
 	cargo clean

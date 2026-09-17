@@ -60,10 +60,10 @@ on every subsequent call. The wallet is bricked and its funds are locked.
 
 | Artifact | Value |
 |---|---|
-| Optimized WASM sha256 | `1c0915fbf780a47465ece4c614596f3fab640dbed80d7d6a82f6cb1b580c6d02` |
+| WASM sha256 (`out/smart_wallet.wasm`) | `c079d3a4136eb6ca68eb724acd3d8af11b0be4a0ed82605925a6dfd4dd83a97c` |
 | Source | `contracts-legacy/` (soroban-sdk 23.0.2, Rust 1.89, `wasm32v1-none`) |
-| Build | `cd contracts-legacy && make hash` (optimized with stellar CLI 27.1.0; a different optimizer can change the hash). Doc comments on exported functions are embedded in the contract spec, so editing them also changes the hash. |
-| Testnet upload | tx `2ce421670311f03ab58704aa06852faa219caa014a49af3bc6f636d353068814` |
+| Build | `cd contracts-legacy && make hash` (`stellar contract build --locked`, CLI 27.1.0; it remaps source paths so the hash matches across machines, and a different CLI version can change it). Doc comments on exported functions are embedded in the contract spec, so editing them also changes the hash. |
+| Testnet upload | tx `ae5e9439ad044b6c6d3cb491ff6f0e5bd60cfcc1eefbc8a56cc6f1f89b93acaf` |
 | Mainnet upload | not yet uploaded |
 | Tests | `cd contracts-legacy && make test` |
 
@@ -92,7 +92,7 @@ funds move. Because the hole is a race, upgrade funded wallets first.
    permissionless and any funded account can pay for it. The legacy SDK line
    has no restore helper; build the operation with `@stellar/stellar-sdk`
    (`Operation.restoreFootprint` plus a simulated footprint).
-2. **Upgrade.** Invoke `update_contract_code(1c0915fb…)` on the wallet,
+2. **Upgrade.** Invoke `update_contract_code(c079d3a4…)` on the wallet,
    authorized by an existing signer. The wallet's current code checks the
    authorization, so the signature format is the one that code expects.
 3. **Normalize (bare cohort).** Invoke `migrate_signers([keys…])` with every
@@ -112,7 +112,7 @@ strict build if its operator chooses to.
 
 ```bash
 # once per network: upload the code. As of 2026-09-17 it is on testnet only.
-stellar contract upload --wasm contracts-legacy/target/wasm32v1-none/release/smart_wallet.optimized.wasm \
+stellar contract upload --wasm contracts-legacy/out/smart_wallet.wasm \
   --source <funded-key> --network mainnet
 
 # per wallet: update_contract_code needs the WALLET's own authorization, which

@@ -10,7 +10,7 @@ All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry cover
   `migrate_signers` and `get_signer`. Wallets on the four mainnet WASM hashes
   whose `update_signer` lacks `require_auth` (`0c0a264d…`, `19868df3…`,
   `b62f6221…`, `c5509dfa…`) can upgrade to
-  `1c0915fbf780a47465ece4c614596f3fab640dbed80d7d6a82f6cb1b580c6d02` without
+  `c079d3a4136eb6ca68eb724acd3d8af11b0be4a0ed82605925a6dfd4dd83a97c` without
   bricking. Earlier post-fix builds brick the two bare-layout hashes. See
   [`docs/legacy-wallet-upgrade.md`](./docs/legacy-wallet-upgrade.md) and the
   new "Known-vulnerable wallet WASM hashes" section in `SECURITY.md`. The v1

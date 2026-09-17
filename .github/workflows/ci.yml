@@ -54,8 +54,8 @@ jobs:
         working-directory: contracts-legacy
         run: cargo fmt --all -- --check
 
-      # `make optimize` needs the stellar CLI; the optimized hash depends on it,
-      # so pin the same version that produced the published hash.
+      # `make build` uses `stellar contract build`; the hash depends on the CLI
+      # version, so pin the one that produced the published hash.
       - name: Install stellar CLI 27.1.0
         run: |
           set -euo pipefail
@@ -65,16 +65,17 @@ jobs:
           sudo install -m 0755 stellar /usr/local/bin/stellar
           stellar --version
 
-      - name: Build, optimize, and test the legacy-line wallet
+      - name: Build and test the legacy-line wallet
         working-directory: contracts-legacy
         run: make test
 
       # The upgrade-target hash published in SECURITY.md and
-      # docs/legacy-wallet-upgrade.md must not drift silently.
-      - name: Assert the optimized WASM hash
+      # docs/legacy-wallet-upgrade.md must not drift silently. The CLI build
+      # remaps source paths, so this hash is the same on every machine.
+      - name: Assert the WASM hash
         working-directory: contracts-legacy
         run: |
-          echo "1c0915fbf780a47465ece4c614596f3fab640dbed80d7d6a82f6cb1b580c6d02  target/wasm32v1-none/release/smart_wallet.optimized.wasm" | shasum -a 256 -c -
+          echo "c079d3a4136eb6ca68eb724acd3d8af11b0be4a0ed82605925a6dfd4dd83a97c  out/smart_wallet.wasm" | shasum -a 256 -c -
 
   build:
     name: test & build

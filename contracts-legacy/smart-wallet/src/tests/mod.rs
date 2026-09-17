@@ -35,12 +35,12 @@ const WASM_B62F6221: &[u8] = include_bytes!("fixtures/b62f6221.wasm");
 /// Mainnet `c5509dfa…`: an integrator build not in this repo; same spec as
 /// `b62f6221…` (constructor, wrapped layout, no auth on `update_signer`).
 const WASM_C5509DFA: &[u8] = include_bytes!("fixtures/c5509dfa.wasm");
-/// This crate, built by `make build`.
-const WASM_NEW: &[u8] = include_bytes!("../../../target/wasm32v1-none/release/smart_wallet.wasm");
-/// The shipped artifact: `make optimize` output, whose sha256 is the
-/// published upgrade-target hash.
-const WASM_NEW_OPTIMIZED: &[u8] =
-    include_bytes!("../../../target/wasm32v1-none/release/smart_wallet.optimized.wasm");
+/// This crate, built by `make build` (`stellar contract build`): the artifact
+/// that ships, whose sha256 is the published upgrade-target hash.
+const WASM_NEW: &[u8] = include_bytes!("../../../out/smart_wallet.wasm");
+/// Alias kept so the "optimized artifact" test name stays meaningful: the CLI
+/// build is the optimized build.
+const WASM_NEW_OPTIMIZED: &[u8] = WASM_NEW;
 
 const SEED: [u8; 32] = [7u8; 32];
 

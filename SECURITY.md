@@ -27,7 +27,7 @@ Wallets deployed from the following mainnet WASM hashes run code in which `updat
 
 Do not deploy new wallets from these hashes, or from any Makefile or `.env` pin older than commit `da472f9`.
 
-Upgrade affected wallets in place to the legacy-line build `1c0915fbf780a47465ece4c614596f3fab640dbed80d7d6a82f6cb1b580c6d02`, built from [`contracts-legacy/`](./contracts-legacy). It reads both storage layouts. The earlier post-fix builds `ecd990f0…` and `e45c42b9…` and the v1 build read only the wrapped layout and brick a bare-layout wallet. See [`docs/legacy-wallet-upgrade.md`](./docs/legacy-wallet-upgrade.md) for the procedure.
+Upgrade affected wallets in place to the legacy-line build `c079d3a4136eb6ca68eb724acd3d8af11b0be4a0ed82605925a6dfd4dd83a97c`, built from [`contracts-legacy/`](./contracts-legacy). It reads both storage layouts. The earlier post-fix builds `ecd990f0…` and `e45c42b9…` and the v1 build read only the wrapped layout and brick a bare-layout wallet. See [`docs/legacy-wallet-upgrade.md`](./docs/legacy-wallet-upgrade.md) for the procedure.
 
 Move funds out of any affected wallet you do not intend to upgrade.
 
