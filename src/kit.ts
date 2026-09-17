@@ -1004,6 +1004,14 @@ export class PasskeyKit {
     contractId: string
   ): Promise<{ inspection: LegacyWalletInspection; tx: AssembledTransaction<null> }> {
     const inspection = await this.inspectLegacyWallet(contractId);
+    if (inspection.wasmHash === inspection.upgradeTarget) {
+      throw new ValidationError(
+        `Wallet ${contractId} already runs the legacy-line target ${inspection.upgradeTarget.slice(0, 8)}…; ` +
+          `nothing to upgrade. ${inspection.recommendation}`,
+        PasskeyKitErrorCode.INVALID_INPUT,
+        { contractId, wasmHash: inspection.wasmHash, status: inspection.status }
+      );
+    }
     if (inspection.status !== "vulnerable" && inspection.status !== "legacy") {
       throw new ValidationError(
         `Wallet ${contractId} is not on a known pre-1.0 build (${inspection.status}); ` +
@@ -1045,7 +1053,7 @@ export class PasskeyKit {
     tx: AssembledTransaction<T>,
     contractId: string,
     signer: Signer = new PasskeySigner("any"),
-    options?: Omit<SignOptions, "allowWalletReentry">
+    options?: Omit<SignOptions, "allowWalletReentry"> & { expectedTarget?: string }
   ): Promise<AssembledTransaction<T>> {
     return signLegacyUpgradeTx(
       {

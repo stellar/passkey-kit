@@ -146,7 +146,8 @@ export async function inspectLegacyWallet(
   const liveByKey = new Map<string, boolean>();
   for (const entry of response.entries) {
     const liveUntil = entry.liveUntilLedgerSeq;
-    liveByKey.set(entry.key.toXDR("base64"), liveUntil !== undefined && liveUntil > latest);
+    // An entry is live through its liveUntil ledger inclusive.
+    liveByKey.set(entry.key.toXDR("base64"), liveUntil !== undefined && liveUntil >= latest);
   }
   const isLive = (key: xdr.LedgerKey) => liveByKey.get(key.toXDR("base64")) === true;
   const archived = {
@@ -297,7 +298,14 @@ export async function signLegacyUpgradeTx<T>(
   deps: SignAuthEntryDeps & { contractId: string },
   tx: AssembledTransaction<T>,
   signer: Signer,
-  options?: Omit<SignOptions, "allowWalletReentry">
+  options?: Omit<SignOptions, "allowWalletReentry"> & {
+    /**
+     * The only WASM hash an `update_contract_code` call may carry. Defaults to
+     * the canonical legacy-line target, so a transaction that would move the
+     * wallet to any other code is refused before anything is signed.
+     */
+    expectedTarget?: string;
+  }
 ): Promise<AssembledTransaction<T>> {
   const built = (tx as { built?: AssembledTransaction<T>["built"] }).built;
   const topOp = built?.operations[0];
@@ -323,9 +331,11 @@ export async function signLegacyUpgradeTx<T>(
     authorizeEntry: async (entry) => {
       const clone = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
       assertRootIsExactlyThisCall(clone, deps.contractId, topFunc);
+      assertUpgradeTarget(clone, options?.expectedTarget ?? LEGACY_UPGRADE_TARGET_WASM_HASH);
       assertAdminRootMatchesHostFunction(clone, deps.contractId, topFunc);
+      const { expectedTarget: _expectedTarget, ...signOptions } = options ?? {};
       return signAuthEntry(deps, clone, signer, {
-        ...options,
+        ...signOptions,
         expiration,
         allowWalletReentry: true,
       });
@@ -353,18 +363,47 @@ function assertRootIsExactlyThisCall(
     : undefined;
   const actual =
     fn.switch().name === "sorobanAuthorizedFunctionTypeContractFn" ? fn.contractFn() : undefined;
+  const name = actual?.functionName().toString();
   const ok =
     expected !== undefined &&
     actual !== undefined &&
     root.subInvocations().length === 0 &&
+    (name === "update_contract_code" || name === "migrate_signers") &&
     Address.fromScAddress(actual.contractAddress()).toString() === contractId &&
     actual.toXDR("base64") === expected.toXDR("base64");
   if (!ok) {
     throw new SigningError(
       `Refusing to sign: the auth entry must root at ${contractId}'s own top-level ` +
-        `update_contract_code / migrate_signers call with no sub-invocations`,
+        `update_contract_code / migrate_signers call with no sub-invocations` +
+        (name ? ` (got ${name})` : ""),
       PasskeyKitErrorCode.SIGNING_FAILED,
       { contractId }
+    );
+  }
+}
+
+/**
+ * An `update_contract_code` root may only carry the expected target hash.
+ * `migrate_signers` and any other call pass through unchanged.
+ */
+function assertUpgradeTarget(entry: xdr.SorobanAuthorizationEntry, expectedTarget: string): void {
+  const fn = entry.rootInvocation().function();
+  if (fn.switch().name !== "sorobanAuthorizedFunctionTypeContractFn") {
+    return;
+  }
+  const call = fn.contractFn();
+  if (call.functionName().toString() !== "update_contract_code") {
+    return;
+  }
+  const arg = call.args()[0];
+  const actual =
+    arg && arg.switch().name === "scvBytes" ? Buffer.from(arg.bytes()).toString("hex") : "";
+  if (actual !== expectedTarget.toLowerCase()) {
+    throw new SigningError(
+      `Refusing to sign update_contract_code(${actual.slice(0, 8) || "?"}…): the only ` +
+        `accepted upgrade target is ${expectedTarget.slice(0, 8)}…`,
+      PasskeyKitErrorCode.SIGNING_FAILED,
+      { actual, expectedTarget }
     );
   }
 }

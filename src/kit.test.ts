@@ -717,7 +717,7 @@ describe("legacy wallet code", () => {
     expect(legacy.vulnerable).toBe(true);
     expect(legacy.wasmHash).toBe(VULNERABLE);
     expect(legacy.upgradeTarget).toBe(LEGACY_UPGRADE_TARGET_WASM_HASH);
-    expect(legacy.message).toContain("update_contract_code");
+    expect(legacy.message).toContain("buildLegacyUpgradeTx");
     expect(legacy.message).toContain(LEGACY_UPGRADE_TARGET_WASM_HASH);
     expect(legacy.message).toContain("legacy-wallet-upgrade.md");
     expect(legacy.context).toMatchObject({ contractId: birth.contractId, vulnerable: true });
@@ -762,6 +762,15 @@ describe("legacy wallet code", () => {
       .catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(LegacyWalletError);
+  });
+
+  it("refuses to build an upgrade for a wallet already on the legacy-line target", async () => {
+    const kit = makeKit();
+    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(
+      instanceWithWasm(LEGACY_UPGRADE_TARGET_WASM_HASH) as never
+    );
+    vi.spyOn(kit.rpc, "getLedgerEntries").mockResolvedValue({ latestLedger: 10, entries: [] } as never);
+    await expect(kit.buildLegacyUpgradeTx(birth.contractId)).rejects.toThrow(/already runs the legacy-line target/);
   });
 
   it("still connects a v1 wallet when a legacy sibling shares the passkey", async () => {

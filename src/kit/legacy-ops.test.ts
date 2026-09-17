@@ -313,3 +313,65 @@ describe("signLegacyUpgradeTx", () => {
     }
   });
 });
+
+describe("signLegacyUpgradeTx target pin", () => {
+  it("refuses an update_contract_code that carries a different WASM hash", async () => {
+    const sim = vi.spyOn(Server.prototype, "simulateTransaction").mockImplementation(simulationStub() as never);
+    try {
+      const tx = await buildLegacyUpgradeTx(
+        { rpcUrl: RPC_URL, networkPassphrase: Networks.TESTNET, timeoutInSeconds: 30, spec },
+        WALLET,
+        "ee".repeat(32)
+      );
+      const error = await signLegacyUpgradeTx(
+        {
+          networkPassphrase: Networks.TESTNET,
+          spec,
+          signerContext: {} as never,
+          calculateExpiration: async () => 150,
+          contractId: WALLET,
+        },
+        tx,
+        new Ed25519Signer(Keypair.random())
+      ).catch((e: unknown) => e);
+      expect((error as { code?: number }).code).toBe(PasskeyKitErrorCode.SIGNING_FAILED);
+      expect((error as Error).message).toContain("accepted upgrade target");
+    } finally {
+      sim.mockRestore();
+    }
+  });
+});
+
+describe("signLegacyUpgradeTx function pin", () => {
+  it("refuses a top-level call that is not update_contract_code or migrate_signers", async () => {
+    const sim = vi.spyOn(Server.prototype, "simulateTransaction").mockImplementation(simulationStub() as never);
+    try {
+      // A wallet-admin call built the same way, rooted at this wallet, no subs.
+      const { AssembledTransaction } = await import("@stellar/stellar-sdk/contract");
+      const tx = await AssembledTransaction.build<null>({
+        method: "add_signer",
+        args: [xdr.ScVal.scvVoid()],
+        contractId: WALLET,
+        rpcUrl: RPC_URL,
+        networkPassphrase: Networks.TESTNET,
+        timeoutInSeconds: 30,
+        parseResultXdr: () => null,
+      });
+      const error = await signLegacyUpgradeTx(
+        {
+          networkPassphrase: Networks.TESTNET,
+          spec,
+          signerContext: {} as never,
+          calculateExpiration: async () => 150,
+          contractId: WALLET,
+        },
+        tx,
+        new Ed25519Signer(Keypair.random())
+      ).catch((e: unknown) => e);
+      expect((error as { code?: number }).code).toBe(PasskeyKitErrorCode.SIGNING_FAILED);
+      expect((error as Error).message).toContain("got add_signer");
+    } finally {
+      sim.mockRestore();
+    }
+  });
+});

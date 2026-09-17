@@ -252,6 +252,10 @@ Each method builds an `AssembledTransaction` (`WalletTx`) that wraps one contrac
 | `remove(signerKey)` | `remove_signer` | Remove a signer. A policy entry must pass its own `policy__` check. |
 | `upgrade(newWasmHash)` | `upgrade` | Replace the wallet's WASM (`Buffer`/`Uint8Array`, 32 bytes). |
 | `getSigner(signerKey)` | `get_signer` | Read a signer entry from the ledger (temporary before persistent). Returns `SignerVal \| null`. |
+| `inspectLegacyWallet(contractId)` | (reads) | Status, storage cohort, archived entries, and a recommendation for a pre-1.0 wallet this kit cannot connect to. |
+| `buildLegacyUpgradeTx(contractId)` | `update_contract_code` | The in-place upgrade to the legacy-line target; restores archived entries first via `restoreSource`. |
+| `signLegacyUpgradeTx(tx, contractId, signer?)` | — | Sign that upgrade with an existing passkey or Ed25519 signer without connecting. |
+| `buildLegacyMigrateTx(contractId, signerKeys)` | `migrate_signers` | Re-encode pre-`6a27d48` signer entries after the upgrade. |
 
 Parameters:
 
@@ -517,7 +521,7 @@ It uses the latest Stellar RPC ledger close timestamp.
 - **Current code identity is not signer provenance.** The SDK also verifies immutable birth code and address-bound proofs. See the [signer-provenance design](docs/security-signer-provenance-v2.md).
 - **WebAuthn requires User Presence (UP), not User Verification (UV).** The contract requires the UP flag but not UV (biometric/PIN), so it stays compatible with non-UV authenticators. Enforce UV at the client/relayer layer if you need it.
 - **Value-moving policies need a cumulative cap or a co-signer.** A `Signature::Policy` carries no secret, so a per-transfer cap alone is trivially drained by repeated capped transfers. See the [contract interface](#contract-interface) and `sample-policy`.
-- **Pre-1.1 wallets cannot use this release.** This alpha release has no legacy connection or migration path.
+- **Pre-1.1 wallets cannot connect through this release.** `connectWallet` throws `LegacyWalletError` for them. The kit does inspect them and build, sign, and migrate their in-place upgrade (`inspectLegacyWallet`, `buildLegacyUpgradeTx`, `signLegacyUpgradeTx`, `buildLegacyMigrateTx`); see [docs/legacy-wallet-upgrade.md](./docs/legacy-wallet-upgrade.md).
 
 ## Contract interface
 
@@ -567,6 +571,7 @@ This tuple remains stable for address compatibility. Signer proofs provide owner
 | `packages/passkey-kit-sdk` | Generated smart-wallet contract bindings (do not hand-edit — see [releasing](./docs/releasing.md)). |
 | `packages/sac-sdk` | Generated SEP-41 SAC bindings. |
 | `contracts/` | Rust Soroban contracts: `smart-wallet`, `smart-wallet-interface`, `sample-policy`, `example-contract`. |
+| `contracts-legacy/` | The pre-1.0 wallet line with dual-layout signer reads: the in-place upgrade target for pre-fix wallets. The canonical artifact is committed at `out/smart_wallet.wasm`. |
 | `relayer-proxy/` | Cloudflare Worker for keyless, fee-sponsored submission. |
 | `demo/` | Svelte 5 demo exercising the full client API. |
 

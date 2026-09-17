@@ -206,12 +206,13 @@ export class LegacyWalletError extends PasskeyKitError {
     const message = vulnerable
       ? `Wallet ${contractId} runs known-vulnerable legacy code ${wasmHash.slice(0, 8)}…: ` +
         `its update_signer has no authorization check, so anyone can take the wallet over. ` +
-        `Upgrade it in place to ${upgradeTarget} with the passkey-kit 0.10.20–0.12.x line ` +
-        `(update_contract_code, then migrate_signers), or move its funds out. ` +
-        `This kit version cannot connect to it. Guide: ${guideUrl}`
+        `Upgrade it in place to ${upgradeTarget}: this kit builds and signs that call ` +
+        `(kit.buildLegacyUpgradeTx, kit.signLegacyUpgradeTx, then kit.buildLegacyMigrateTx ` +
+        `for the oldest layout), or use the passkey-kit 0.10.20–0.12.x line; or move its ` +
+        `funds out. This kit version cannot connect to it. Guide: ${guideUrl}`
       : `Wallet ${contractId} runs patched legacy code ${wasmHash.slice(0, 8)}…, ` +
-        `which this kit version cannot connect to. Use the passkey-kit 0.10.20–0.12.x ` +
-        `line for this wallet. Guide: ${guideUrl}`;
+        `which this kit version cannot connect to. Operate it with the passkey-kit ` +
+        `0.10.20–0.12.x line (kit.inspectLegacyWallet describes its state). Guide: ${guideUrl}`;
     super(message, PasskeyKitErrorCode.WALLET_LEGACY_CODE, {
       context: { contractId, wasmHash, vulnerable, upgradeTarget, guideUrl },
     });
