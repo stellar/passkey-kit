@@ -39,7 +39,7 @@ jobs:
         run: cargo test --workspace --locked
 
   contracts-legacy:
-    name: legacy contract tests + hash
+    name: legacy contract tests + canonical hash
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -54,8 +54,17 @@ jobs:
         working-directory: contracts-legacy
         run: cargo fmt --all -- --check
 
-      # `make build` uses `stellar contract build`; the hash depends on the CLI
-      # version, so pin the one that produced the published hash.
+      # The committed artifact is the upgrade target published in SECURITY.md
+      # and docs/legacy-wallet-upgrade.md. Its hash must not drift, and the
+      # end-to-end tests run against exactly those bytes.
+      - name: Verify the canonical artifact and run the tests
+        working-directory: contracts-legacy
+        run: make test
+
+      # Informational: rebuild on this host and report. rustc's wasm codegen is
+      # host-dependent, so this hash is not expected to equal the canonical one;
+      # the step exists so a source change that silently alters the contract is
+      # visible in the log.
       - name: Install stellar CLI 27.1.0
         run: |
           set -euo pipefail
@@ -63,31 +72,12 @@ jobs:
             https://github.com/stellar/stellar-cli/releases/download/v27.1.0/stellar-cli-27.1.0-x86_64-unknown-linux-gnu.tar.gz
           tar -xzf stellar-cli.tar.gz
           sudo install -m 0755 stellar /usr/local/bin/stellar
-          stellar --version
 
-      - name: Build and test the legacy-line wallet
-        working-directory: contracts-legacy
-        run: make test
-
-      # The upgrade-target hash published in SECURITY.md and
-      # docs/legacy-wallet-upgrade.md must not drift silently. The CLI build
-      # remaps source paths, so this hash is the same on every machine.
-      - name: Report the built WASM
+      - name: Rebuild on this host (informational)
         working-directory: contracts-legacy
         run: |
-          shasum -a 256 out/smart_wallet.wasm
-          stellar contract info meta --wasm out/smart_wallet.wasm || true
-          stellar contract info env-meta --wasm out/smart_wallet.wasm || true
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: legacy-smart-wallet-wasm
-          path: contracts-legacy/out/smart_wallet.wasm
-
-      - name: Assert the WASM hash
-        working-directory: contracts-legacy
-        run: |
-          echo "c079d3a4136eb6ca68eb724acd3d8af11b0be4a0ed82605925a6dfd4dd83a97c  out/smart_wallet.wasm" | shasum -a 256 -c -
+          stellar contract build --locked --package smart-wallet --out-dir rebuilt
+          shasum -a 256 rebuilt/smart_wallet.wasm out/smart_wallet.wasm
 
   build:
     name: test & build

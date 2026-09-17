@@ -190,4 +190,7 @@ docs/history/
 # legacy-line contract workspace: generated test snapshots
 contracts-legacy/smart-wallet/test_snapshots/
 
-contracts-legacy/out/
+
+# The canonical legacy-line artifact is committed (its hash is the published upgrade target).
+!contracts-legacy/out/
+!contracts-legacy/out/smart_wallet.wasm

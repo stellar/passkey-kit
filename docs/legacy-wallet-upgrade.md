@@ -62,10 +62,10 @@ on every subsequent call. The wallet is bricked and its funds are locked.
 |---|---|
 | WASM sha256 (`out/smart_wallet.wasm`) | `c079d3a4136eb6ca68eb724acd3d8af11b0be4a0ed82605925a6dfd4dd83a97c` |
 | Source | `contracts-legacy/` (soroban-sdk 23.0.2, Rust 1.89, `wasm32v1-none`) |
-| Build | `cd contracts-legacy && make hash` (`stellar contract build --locked`, CLI 27.1.0; it remaps source paths so the hash matches across machines, and a different CLI version can change it). Doc comments on exported functions are embedded in the contract spec, so editing them also changes the hash. |
+| Canonical artifact | `contracts-legacy/out/smart_wallet.wasm`, committed. CI asserts its hash and runs the tests against it. Built with Rust 1.89 and stellar CLI 27.1.0 on macOS aarch64. `stellar contract build` remaps source paths, but rustc's wasm codegen differs across host platforms, so a rebuild on another host is functionally equivalent with a different hash. Doc comments on exported functions are embedded in the contract spec, so editing them also changes the hash. |
 | Testnet upload | tx `ae5e9439ad044b6c6d3cb491ff6f0e5bd60cfcc1eefbc8a56cc6f1f89b93acaf` |
 | Mainnet upload | not yet uploaded |
-| Tests | `cd contracts-legacy && make test` |
+| Verify / test | `cd contracts-legacy && make verify` / `make test` |
 
 The tests load the real mainnet `0c0a264d…`, `b62f6221…`, and `c5509dfa…`
 WASM, create a wallet on each, upgrade it to this build with a real signed authorization,

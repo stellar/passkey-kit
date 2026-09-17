@@ -11,7 +11,8 @@ All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry cover
   whose `update_signer` lacks `require_auth` (`0c0a264d…`, `19868df3…`,
   `b62f6221…`, `c5509dfa…`) can upgrade to
   `c079d3a4136eb6ca68eb724acd3d8af11b0be4a0ed82605925a6dfd4dd83a97c` without
-  bricking. Earlier post-fix builds brick the two bare-layout hashes. See
+  bricking. The artifact is committed at `contracts-legacy/out/smart_wallet.wasm`
+  and CI verifies its hash. Earlier post-fix builds brick the two bare-layout hashes. See
   [`docs/legacy-wallet-upgrade.md`](./docs/legacy-wallet-upgrade.md) and the
   new "Known-vulnerable wallet WASM hashes" section in `SECURITY.md`. The v1
   contract is unchanged.
