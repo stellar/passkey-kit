@@ -72,6 +72,18 @@ jobs:
       # The upgrade-target hash published in SECURITY.md and
       # docs/legacy-wallet-upgrade.md must not drift silently. The CLI build
       # remaps source paths, so this hash is the same on every machine.
+      - name: Report the built WASM
+        working-directory: contracts-legacy
+        run: |
+          shasum -a 256 out/smart_wallet.wasm
+          stellar contract info meta --wasm out/smart_wallet.wasm || true
+          stellar contract info env-meta --wasm out/smart_wallet.wasm || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legacy-smart-wallet-wasm
+          path: contracts-legacy/out/smart_wallet.wasm
+
       - name: Assert the WASM hash
         working-directory: contracts-legacy
         run: |
