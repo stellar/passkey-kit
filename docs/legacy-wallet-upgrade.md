@@ -67,6 +67,17 @@ on every subsequent call. The wallet is bricked and its funds are locked.
 | Mainnet upload | tx `501bd5d5d06ac131e7da213fb29f59b6338332e1bc8900705017dab396102c72` (2026-09-17) |
 | Verify / test | `cd contracts-legacy && make verify` / `make test` |
 
+**Live verification (testnet, 2026-09-17).** The full `passkey-kit` path
+(`inspectLegacyWallet` → `buildLegacyUpgradeTx` → `signLegacyUpgradeTx` with an
+Ed25519 signer → relayer-style submission of `{ func, auth }` →
+`buildLegacyMigrateTx` → `get_signer`) was run against wallets deployed from
+the real mainnet bytecode of both cohorts:
+
+| Cohort | Wallet | Upgrade tx | migrate_signers | Result |
+|---|---|---|---|---|
+| wrapped (`b62f6221…`) | `CBS2KQYXAA44TDANAB6G2DBLCAFPS2IBIMWKGHUJXZH65SEBVWDLLWBQ` | `732e82f4…` | `a1a00b96…` (0 rewritten) | code = target; unauthenticated `update_signer` now fails |
+| bare (`0c0a264d…`) | `CA4CYKSPHUYJ7TXFR47D2FHAXJQ6JNNRLUTNF7LQWEYQUOQLZYUPCTOB` | `3a9ba357…` | `3eb34d00…` (1 rewritten, then 0) | code = target; signer readable; unauthenticated `update_signer` now fails |
+
 The tests load the real mainnet `0c0a264d…`, `b62f6221…`, and `c5509dfa…`
 WASM, create a wallet on each, upgrade it to this build with a real signed authorization,
 and check that the hole is closed, the wallet still authorizes, and
@@ -91,7 +102,11 @@ funds move. Because the hole is a race, upgrade funded wallets first.
    entries, and the code entry of the target hash if needed. Restore is
    permissionless and any funded account can pay for it. The legacy SDK line
    has no restore helper; build the operation with `@stellar/stellar-sdk`
-   (`Operation.restoreFootprint` plus a simulated footprint).
+   (`Operation.restoreFootprint` plus a simulated footprint). On protocol 23
+   and later, archived entries in a transaction's footprint are restored
+   automatically as part of that transaction when they fit its limits, so a
+   separate restore is often unnecessary; the current kit handles the
+   remaining case through `restoreSource`.
 2. **Upgrade.** Invoke `update_contract_code(c079d3a4…)` on the wallet,
    authorized by an existing signer. The wallet's current code checks the
    authorization, so the signature format is the one that code expects.
@@ -135,8 +150,9 @@ means the browser. Use the last legacy SDK line (`passkey-kit` `0.10.20`
 through `0.12.x`) to connect to the wallet, build a transaction that invokes
 `update_contract_code` with the hash above, sign it with the passkey (or
 with an Ed25519 signer key the wallet holds), and submit it through your
-relayer or a funded source. The current SDK (`0.17.0` and later) does not
-connect to these wallets and cannot be used for this step.
+relayer or a funded source. Or use the current SDK (`0.19.0` and later): it
+does not connect to these wallets, but it builds and signs this exact call;
+see the next section.
 
 ## What the current kit does with a legacy wallet
 
@@ -163,7 +179,13 @@ recognizes one and can craft its upgrade.
   specific credential or an `Ed25519Signer`.
 - `buildLegacyMigrateTx(contractId, signerKeys)` builds `migrate_signers`
   for the bare cohort after the upgrade. Get the keys from
-  `PasskeyServer.getSigners` or `MercuryIndexer.getSigners`.
+  `PasskeyServer.getSigners` or `MercuryIndexer.getSigners`. Decide whether
+  to migrate from the inspection taken *before* the upgrade: once the wallet
+  runs the target, `inspectLegacyWallet` no longer knows its original layout.
+- `signLegacyUpgradeTx` signs only a top-level `update_contract_code` or
+  `migrate_signers` on the named wallet, with no sub-invocations, and only
+  when the upgrade target is the canonical hash (override with
+  `expectedTarget`). It refuses anything else before hashing.
 
 ```ts
 const { inspection, tx } = await kit.buildLegacyUpgradeTx(contractId);
@@ -194,7 +216,9 @@ The 0.10.20–0.12.x kit line still works for the same steps if you prefer it.
 - The reverse holds before the upgrade: a bare-layout wallet whose only
   usable signer is a policy must authorize the upgrade with a bare-era
   signature map (`void` for the policy entry), because the old code has no
-  `Signature::Policy` variant. Passkey and Ed25519 signatures encode the
+  `Signature::Policy` variant. The current kit's `PolicySigner` emits
+  `Signature::Policy`, so it cannot authorize that case; use a passkey or
+  Ed25519 signer on such a wallet, or a bare-era client. Passkey and Ed25519 signatures encode the
   same way in both eras and need no special handling.
 
 ## Boundaries

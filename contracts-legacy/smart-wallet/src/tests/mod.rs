@@ -1,10 +1,11 @@
 //! Tests for the legacy-line upgrade target.
 //!
-//! The end-to-end tests load the real mainnet WASM of two vulnerable builds
-//! (`fixtures/`), create a wallet on each, upgrade it in place to the WASM
-//! built from this crate, and check that the wallet keeps working, that the
-//! hole is closed, and that `migrate_signers` re-encodes the pre-`6a27d48`
-//! entries. `make test` builds the WASM first.
+//! The end-to-end tests load the real mainnet WASM of three vulnerable builds
+//! (`fixtures/`), create a wallet on each, upgrade it in place to the committed
+//! canonical artifact (`out/smart_wallet.wasm`), and check that the wallet
+//! keeps working, that the hole is closed, and that `migrate_signers`
+//! re-encodes the pre-`6a27d48` entries. `make test` verifies the artifact's
+//! hash first.
 extern crate std;
 
 use ed25519_dalek::{Signer as _, SigningKey};

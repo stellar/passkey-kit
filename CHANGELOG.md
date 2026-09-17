@@ -2,6 +2,26 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.19.1 — 2026-09-17
+
+- **Pinned what `signLegacyUpgradeTx` will sign.** The auth entry must root at
+  the named wallet's own top-level `update_contract_code` or `migrate_signers`
+  with no sub-invocations, and an `update_contract_code` may only carry the
+  canonical legacy-line target (override with `expectedTarget`). `0.19.0`
+  pinned the root to the transaction's own call but not the function name or
+  the target, so a hostile transaction rooted at another wallet-admin call
+  could have been signed through this path.
+- **Refused a pointless re-upgrade.** `buildLegacyUpgradeTx` now rejects a
+  wallet already on the legacy-line target.
+- **Counted an entry as live through its `liveUntil` ledger inclusive** in
+  `inspectLegacyWallet`.
+- **Pointed `LegacyWalletError` at the kit's own helpers**, not only at the
+  0.10.20–0.12.x line.
+- **Docs.** README no longer says this release has no legacy migration path;
+  the guide's application section, restore step (protocol-23 auto-restore),
+  policy-signer boundary, migrate-decision timing, and a live testnet
+  verification of both cohorts through the SDK path.
+
 ## 0.19.0 — 2026-09-17
 
 - **Added a safe in-place upgrade target for pre-fix legacy wallets.** New
