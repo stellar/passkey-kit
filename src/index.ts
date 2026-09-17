@@ -71,6 +71,14 @@ export {
   wrapError,
 } from "./errors.js";
 
+// Legacy (pre-1.0) wallet upgrade helpers
+export {
+  classifyWasmHash,
+  BARE_LAYOUT_WALLET_WASM_HASHES,
+  type LegacyCodeStatus,
+  type LegacyWalletInspection,
+} from "./kit/legacy-ops.js";
+
 // Legacy (pre-1.0) wallet code identities
 export {
   KNOWN_VULNERABLE_WALLET_WASM_HASHES,

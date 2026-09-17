@@ -2,7 +2,7 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
-## Unreleased
+## 0.19.0 — 2026-09-17
 
 - **Added a safe in-place upgrade target for pre-fix legacy wallets.** New
   `contracts-legacy/` workspace builds the last pre-1.0 wallet (`e45c42b9…`)
@@ -25,6 +25,20 @@ All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry cover
   New exports: `LegacyWalletError`, `KNOWN_VULNERABLE_WALLET_WASM_HASHES`,
   `LEGACY_WALLET_WASM_HASHES`, `LEGACY_UPGRADE_TARGET_WASM_HASH`,
   `LEGACY_WALLET_UPGRADE_GUIDE_URL`.
+- **Crafted the legacy upgrade from the wallet's actual state.** New kit
+  methods for wallets this kit cannot connect to: `inspectLegacyWallet(id)`
+  reads the code hash and the liveness of the instance, current-code, and
+  target-code entries and returns a status (`vulnerable` / `legacy` /
+  `current` / `unknown`), the storage cohort, what is archived, and a plain
+  recommendation; `buildLegacyUpgradeTx(id)` builds
+  `update_contract_code(<target>)` (restoring archived entries first when
+  `restoreSource` is configured); `buildLegacyMigrateTx(id, keys)` builds
+  `migrate_signers`; `signLegacyUpgradeTx(tx, id, signer?)` signs the
+  wallet's auth entry with an existing passkey or Ed25519 signer without a
+  connected wallet, root-pinned like every admin write. Submit through
+  `PasskeyServer.send`. Also exported: `classifyWasmHash`,
+  `BARE_LAYOUT_WALLET_WASM_HASHES`, `LegacyWalletInspection`,
+  `LegacyCodeStatus`.
 - **Updated the relayer development image dependency.** The standalone relayer
   lock now requires `sharp@0.35.4`, which removes the development-only
   `GHSA-rgj7-g3m4-5g8c` alert. This change does not affect the published package
