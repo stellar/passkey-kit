@@ -58,6 +58,7 @@ export {
   WalletNotConnectedError,
   WalletOwnershipError,
   WalletAmbiguousError,
+  LegacyWalletError,
   WebAuthnError,
   SigningError,
   SignerNotFoundError,
@@ -69,6 +70,14 @@ export {
   ContractError,
   wrapError,
 } from "./errors.js";
+
+// Legacy (pre-1.0) wallet code identities
+export {
+  KNOWN_VULNERABLE_WALLET_WASM_HASHES,
+  LEGACY_WALLET_WASM_HASHES,
+  LEGACY_UPGRADE_TARGET_WASM_HASH,
+  LEGACY_WALLET_UPGRADE_GUIDE_URL,
+} from "./constants.js";
 
 // Contract-error decoding
 export {

@@ -1,0 +1,29 @@
+# Legacy-line smart-wallet workspace.
+#
+# This workspace is deliberately separate from `contracts/` (the v1 line,
+# soroban-sdk 27). It pins soroban-sdk 23 and Rust 1.89 so that the produced
+# WASM stays as close as possible to the last legacy canonical build
+# (`e45c42b9…`, commit aeb04d7). Its only purpose is a safe in-place upgrade
+# target for pre-1.0 wallets that still run a WASM without `require_auth` in
+# `update_signer`. See `docs/legacy-wallet-upgrade.md`.
+[workspace]
+resolver = "2"
+
+members = ["smart-wallet", "smart-wallet-interface"]
+
+[workspace.dependencies]
+soroban-sdk = "23.0"
+serde = { version = "1.0", default-features = false }
+serde-json-core = { version = "0.6", default-features = false }
+ed25519-dalek = { version = "2.1" }
+smart-wallet-interface = { path = "smart-wallet-interface" }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true

@@ -14,6 +14,25 @@ Only the latest npm releases and the canonical smart-wallet WASM receive securit
 
 The current [`deployment manifest`](./docs/deployments-2026-09-01.md) identifies the canonical WASM. Existing wallet instances do not upgrade automatically.
 
+## Known-vulnerable wallet WASM hashes
+
+Wallets deployed from the following mainnet WASM hashes run code in which `update_signer` has no authorization check. Anyone who knows a signer key can overwrite that signer. The defect was fixed in source in commit [`dcc6e3dc9c`](https://github.com/kalepail/passkey-kit/commit/dcc6e3dc9cfd32e64b98f23541cd2d96812b64c4) on 2025-03-27. Deployed wallets keep the old code until their owner upgrades them.
+
+| WASM hash | Storage layout |
+|---|---|
+| `0c0a264d4cc0b3e79b8533e2a2e1f0ed21501a5a3f9f2455d2f18c232940b865` | bare (pre-`6a27d48`) |
+| `19868df3653d427cafa1c30bdb6cec1ca5c8c815eeabab8a8bae6d83efb1fedd` | bare (pre-`6a27d48`) |
+| `b62f62217ff256d557513793e9e44317b25b14401a8a6b6149a04d38d72d6c7c` | wrapped |
+| `c5509dfa5f022deb8ae621f073adac5fd788feca0b24d15b5f392ab22c2ff222` | wrapped (not built from this repo) |
+
+Do not deploy new wallets from these hashes, or from any Makefile or `.env` pin older than commit `da472f9`.
+
+Upgrade affected wallets in place to the legacy-line build `1c0915fbf780a47465ece4c614596f3fab640dbed80d7d6a82f6cb1b580c6d02`, built from [`contracts-legacy/`](./contracts-legacy). It reads both storage layouts. The earlier post-fix builds `ecd990f0…` and `e45c42b9…` and the v1 build read only the wrapped layout and brick a bare-layout wallet. See [`docs/legacy-wallet-upgrade.md`](./docs/legacy-wallet-upgrade.md) for the procedure.
+
+Move funds out of any affected wallet you do not intend to upgrade.
+
+The current SDK refuses to deploy from these hashes and throws `LegacyWalletError` with the upgrade guidance when `connectWallet` meets a wallet running one of them.
+
 ## Cargo advisory status
 
 The lockfile retains `serde_with@3.14.0` and its inactive `time@0.3.41` optional dependency.

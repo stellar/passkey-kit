@@ -4,6 +4,26 @@ All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry cover
 
 ## Unreleased
 
+- **Added a safe in-place upgrade target for pre-fix legacy wallets.** New
+  `contracts-legacy/` workspace builds the last pre-1.0 wallet (`e45c42b9…`)
+  with signer reads that accept both pre-1.0 storage layouts, plus
+  `migrate_signers` and `get_signer`. Wallets on the four mainnet WASM hashes
+  whose `update_signer` lacks `require_auth` (`0c0a264d…`, `19868df3…`,
+  `b62f6221…`, `c5509dfa…`) can upgrade to
+  `1c0915fbf780a47465ece4c614596f3fab640dbed80d7d6a82f6cb1b580c6d02` without
+  bricking. Earlier post-fix builds brick the two bare-layout hashes. See
+  [`docs/legacy-wallet-upgrade.md`](./docs/legacy-wallet-upgrade.md) and the
+  new "Known-vulnerable wallet WASM hashes" section in `SECURITY.md`. The v1
+  contract is unchanged.
+- **Named legacy wallets on connect.** `connectWallet` now throws
+  `LegacyWalletError` (code `2006`, `WALLET_LEGACY_CODE`) when a candidate
+  wallet runs pre-1.0 code, before birth verification would fail it for a less
+  useful reason. `vulnerable: true` carries the in-place upgrade target and the
+  guide URL; `vulnerable: false` points at the 0.10.20–0.12.x kit line. The
+  constructor rejects a known-vulnerable `walletWasmHash` or accepted hash.
+  New exports: `LegacyWalletError`, `KNOWN_VULNERABLE_WALLET_WASM_HASHES`,
+  `LEGACY_WALLET_WASM_HASHES`, `LEGACY_UPGRADE_TARGET_WASM_HASH`,
+  `LEGACY_WALLET_UPGRADE_GUIDE_URL`.
 - **Updated the relayer development image dependency.** The standalone relayer
   lock now requires `sharp@0.35.4`, which removes the development-only
   `GHSA-rgj7-g3m4-5g8c` alert. This change does not affect the published package

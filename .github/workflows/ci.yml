@@ -38,6 +38,44 @@ jobs:
         working-directory: contracts
         run: cargo test --workspace --locked
 
+  contracts-legacy:
+    name: legacy contract tests + hash
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: 1.89.0
+          targets: wasm32v1-none
+          components: rustfmt
+
+      - name: Check legacy contract formatting
+        working-directory: contracts-legacy
+        run: cargo fmt --all -- --check
+
+      # `make optimize` needs the stellar CLI; the optimized hash depends on it,
+      # so pin the same version that produced the published hash.
+      - name: Install stellar CLI 27.1.0
+        run: |
+          set -euo pipefail
+          curl -fsSL -o stellar-cli.tar.gz \
+            https://github.com/stellar/stellar-cli/releases/download/v27.1.0/stellar-cli-27.1.0-x86_64-unknown-linux-gnu.tar.gz
+          tar -xzf stellar-cli.tar.gz
+          sudo install -m 0755 stellar /usr/local/bin/stellar
+          stellar --version
+
+      - name: Build, optimize, and test the legacy-line wallet
+        working-directory: contracts-legacy
+        run: make test
+
+      # The upgrade-target hash published in SECURITY.md and
+      # docs/legacy-wallet-upgrade.md must not drift silently.
+      - name: Assert the optimized WASM hash
+        working-directory: contracts-legacy
+        run: |
+          echo "1c0915fbf780a47465ece4c614596f3fab640dbed80d7d6a82f6cb1b580c6d02  target/wasm32v1-none/release/smart_wallet.optimized.wasm" | shasum -a 256 -c -
+
   build:
     name: test & build
     runs-on: ubuntu-latest
