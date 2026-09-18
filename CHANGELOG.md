@@ -383,7 +383,7 @@ Rewires the `MercuryIndexer` onto Mercury's hosted, **keyless** passkey-indexer,
 > [!IMPORTANT]
 > **Compatibility: breaking, forward-only — there is no compatibility layer with 0.12.x.** The on-chain contract, its wire events, its error codes, the signer model, the SDK's public API, and the package's shape all changed. See [`docs/migration-v1.md`](./docs/migration-v1.md) for a complete migration guide with Before/After examples, a removed-exports list, and an A/B gap analysis.
 >
-> Pre-1.0 wallets remain live on both networks and derive from the same address tuple; they interact only with legacy tooling but can be upgraded in place to a v1 WASM via their own auth. Requires `@stellar/stellar-sdk >= 16.0.0` (peer dependency).
+> Pre-1.0 wallets remain live on both networks and derive from the same address tuple; they interact only with legacy tooling. **Do not upgrade them in place to a v1 WASM**: v1 changed the stored signer types, so the wallet stops decoding its own signers. The safe in-place target for pre-1.0 wallets is the legacy-line build in [`docs/legacy-wallet-upgrade.md`](./docs/legacy-wallet-upgrade.md) (corrected 2026-09-18; this note originally said a v1 upgrade was possible). Requires `@stellar/stellar-sdk >= 16.0.0` (peer dependency).
 
 The overhaul rebuilds passkey-kit against `soroban-sdk 27` (Protocol 27, "Zipper") after an internal multi-reviewer adversarial audit of the contract. Every SDK sample, method table, and error code in the documentation is verified against the shipped source.
 
