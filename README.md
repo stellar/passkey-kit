@@ -585,6 +585,7 @@ pnpm verify:bindings  # assert the committed bindings match the canonical WASM
 - **[SECURITY.md](./SECURITY.md)** — supported versions and private vulnerability reporting.
 - **[docs/migration-v1.md](./docs/migration-v1.md)** — upgrading from 0.12.x, with Before/After and a gap analysis.
 - **[docs/legacy-wallet-upgrade.md](./docs/legacy-wallet-upgrade.md)** — in-place upgrade for pre-fix legacy wallets (known-vulnerable WASM hashes in [SECURITY.md](./SECURITY.md)).
+- **[docs/legacy-code-inventory.md](./docs/legacy-code-inventory.md)** — what legacy code remains, why, and what removing it would break.
 - **[docs/releasing.md](./docs/releasing.md)** — the dependency-ordered publish flow.
 
 ## Resources

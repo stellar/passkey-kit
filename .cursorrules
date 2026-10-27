@@ -67,3 +67,7 @@ This repo is a **pnpm workspace** (`packages/**`); use `pnpm` for Node tasks.
 
 `README.md` (API + caveats), `CHANGELOG.md`, `docs/migration-v1.md`,
 `docs/releasing.md`, and each subproject's own `README.md`.
+
+Before removing anything that looks like legacy code, read
+`docs/legacy-code-inventory.md`: some of it protects funds in deployed mainnet
+wallets. Keep that inventory current when legacy code is added or removed.
