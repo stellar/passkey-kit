@@ -271,7 +271,10 @@ describe("wallet-admin signing scope", () => {
   it("refuses a detached second wallet entry rooted at a token transfer", async () => {
     const tx = await adminTx((top) => [entry(invFromArgs(top)), entry(transfer(OTHER), "8")]);
     await expect(manager().signAdmin(tx, recordingSigner())).rejects.toThrow();
-    expect(authOf(tx).some((e) => isSigned(e) && tree(e)[0] === "TOKEN.transfer")).toBe(false);
+    // Nothing is signed: the wallet-entry count is checked before signing, so
+    // the admin entry gets no leftover signature before the transfer is
+    // refused — not just the transfer entry stays unsigned.
+    expect(authOf(tx).some(isSigned)).toBe(false);
   });
 
   it("refuses a second wallet entry whose root is a third-party call carrying add_signer", async () => {
