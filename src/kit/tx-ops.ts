@@ -92,7 +92,42 @@ const WALLET_ADMIN_FUNCTIONS = new Set([
   "update_signer",
   "remove_signer",
   "upgrade",
+  // Legacy (pre-1.0) wallet-admin names: a legacy wallet administers itself and
+  // swaps its own code through these. They must be refused on the generic and
+  // standalone signing paths exactly like the current names; the dedicated
+  // legacy flow (`signLegacyUpgradeTx`) signs them through its own exact-root
+  // pin and so bypasses this set.
+  "update_contract_code",
+  "migrate_signers",
 ]);
+
+/**
+ * The address an auth entry's credentials speak for, or `undefined` for
+ * credentials that are not address-bound (e.g. source-account credentials).
+ */
+function credentialAddress(entry: xdr.SorobanAuthorizationEntry): string | undefined {
+  try {
+    return Address.fromScAddress(
+      getAddressCredentials(entry.credentials()).address()
+    ).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Count the authorization entries a transaction carries for `contractId` — the
+ * entries the SDK will hand to the signing callback. The wallet-admin path
+ * signs exactly one of these (the admin call itself); more than one means a
+ * simulation grafted extra wallet authority on, and zero means the admin call
+ * the caller built is absent.
+ */
+export function countWalletEntries(
+  auth: readonly xdr.SorobanAuthorizationEntry[],
+  contractId: string
+): number {
+  return auth.filter((e) => credentialAddress(e) === contractId).length;
+}
 
 /** Describe one authorized invocation as `CONTRACT.fn` for error context. */
 function describeWalletInvocation(inv: xdr.SorobanAuthorizedInvocation): string {
@@ -386,19 +421,46 @@ export async function sign<T>(
       ? (topOp as Operation.InvokeHostFunction).func
       : undefined;
 
-  // On the admin path a readable top-level invoke is mandatory: it is the only
-  // thing the admin entry can be pinned against. Refuse rather than fall
-  // through to signing an un-pinned wallet-admin authorization.
-  if (adminPath && !topFunc) {
-    throw new SigningError(
-      "Refusing to sign a wallet-admin transaction without a readable top-level invoke-host-function operation to pin the authorization against.",
-      PasskeyKitErrorCode.SIGNING_FAILED,
-      { contractId }
+  // The admin path carries extra, transaction-wide obligations that must hold
+  // before any signature is produced (`signAuthEntries` signs an entry in
+  // place as soon as its callback returns, so a per-entry check cannot undo a
+  // signature already placed on an earlier entry).
+  let adminExpiration: number | undefined;
+  if (adminPath) {
+    // A readable top-level invoke is mandatory: it is the only thing the admin
+    // entry can be pinned against.
+    if (!topFunc) {
+      throw new SigningError(
+        "Refusing to sign a wallet-admin transaction without a readable top-level invoke-host-function operation to pin the authorization against.",
+        PasskeyKitErrorCode.SIGNING_FAILED,
+        { contractId }
+      );
+    }
+    // Exactly one wallet authorization — the admin call itself. The dedicated
+    // builders produce one; a simulation that returns extra wallet entries
+    // (e.g. a duplicate admin root under a second nonce, replayable later) or
+    // none is refused before anything is signed.
+    const walletEntries = countWalletEntries(
+      (topOp as Operation.InvokeHostFunction).auth ?? [],
+      contractId
     );
+    if (walletEntries !== 1) {
+      throw new SigningError(
+        `Refusing to sign a wallet-admin transaction that authorizes ${walletEntries} wallet entries; exactly one (the admin call itself) is allowed.`,
+        PasskeyKitErrorCode.SIGNING_FAILED,
+        { contractId }
+      );
+    }
+    // Resolve the signature lifetime from the caller/kit, never from the
+    // simulation-supplied entry: a hostile RPC must not choose how long the
+    // admin signature stays replayable. (The generic dApp path keeps the
+    // entry's own ledger; its signatures are scoped to the dApp's call.)
+    adminExpiration = options?.expiration ?? (await deps.calculateExpiration());
   }
 
   await txn.signAuthEntries({
     address: contractId,
+    ...(adminExpiration != null ? { expiration: adminExpiration } : {}),
     authorizeEntry: async (entry) => {
       const clone = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
       if (adminPath) {
@@ -406,7 +468,7 @@ export async function sign<T>(
         assertAdminEntryMatchesHostFunction(clone, contractId, topFunc!);
       }
       return signAuthEntry(deps, clone, signer, {
-        expiration: options?.expiration,
+        expiration: adminPath ? adminExpiration : options?.expiration,
         adminEntry: adminPath,
       });
     },

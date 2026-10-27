@@ -28,6 +28,7 @@ import type { SignerKey } from "../types.js";
 import type { Signer } from "../signers.js";
 import { signerKeyToScVal } from "./auth-payload.js";
 import {
+  countWalletEntries,
   signAuthEntry,
   type SignAuthEntryDeps,
   type SignOptions,
@@ -316,6 +317,21 @@ export async function signLegacyUpgradeTx<T>(
     throw new ValidationError(
       "the transaction has no invoke-host-function operation to sign",
       PasskeyKitErrorCode.INVALID_INPUT,
+      { contractId: deps.contractId }
+    );
+  }
+
+  // Exactly one wallet authorization — this wallet's own upgrade call. Refuse
+  // before signing if a simulation returned extra wallet entries (e.g. a
+  // duplicate upgrade root under a second nonce) or none.
+  const walletEntries = countWalletEntries(
+    (topOp as Operation.InvokeHostFunction).auth ?? [],
+    deps.contractId
+  );
+  if (walletEntries !== 1) {
+    throw new SigningError(
+      `Refusing to sign a legacy upgrade that authorizes ${walletEntries} wallet entries; exactly one (the upgrade call itself) is allowed.`,
+      PasskeyKitErrorCode.SIGNING_FAILED,
       { contractId: deps.contractId }
     );
   }

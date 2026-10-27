@@ -39,6 +39,7 @@ const cid = (tag: string) => StrKey.encodeContract(hash(Buffer.from(tag)));
 const WALLET = cid("wallet");
 const TOKEN = cid("token");
 const EVIL = cid("evil");
+const LEGACY = cid("legacy");
 const LEGIT = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 1)).publicKey();
 const OTHER = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 2)).publicKey();
 const EXPIRATION = 5000;
@@ -149,6 +150,36 @@ function entry(root: xdr.SorobanAuthorizedInvocation, nonce = "7") {
     ),
     rootInvocation: root,
   });
+}
+
+/** A wallet-credentialed entry for an arbitrary wallet address and expiration. */
+function entryForWallet(
+  walletAddr: string,
+  root: xdr.SorobanAuthorizedInvocation,
+  nonce = "7",
+  expirationLedger = 0
+) {
+  return new xdr.SorobanAuthorizationEntry({
+    credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
+      new xdr.SorobanAddressCredentials({
+        address: Address.fromString(walletAddr).toScAddress(),
+        nonce: xdr.Int64.fromString(nonce),
+        signatureExpirationLedger: expirationLedger,
+        signature: xdr.ScVal.scvVoid(),
+      })
+    ),
+    rootInvocation: root,
+  });
+}
+
+/** Read the signature-expiration ledger off a V1 or V2 address credential. */
+function expirationOf(entry: xdr.SorobanAuthorizationEntry): number {
+  const kind = entry.credentials().switch().name;
+  if (kind === "sorobanCredentialsAddressV2")
+    return entry.credentials().addressV2().signatureExpirationLedger();
+  if (kind === "sorobanCredentialsAddress")
+    return entry.credentials().address().signatureExpirationLedger();
+  return 0;
 }
 
 // --- simulation stub + kit wiring ------------------------------------------
@@ -272,6 +303,67 @@ describe("wallet-admin signing scope", () => {
       manager().signAuthEntry(entry(invFromArgs(otherArgs)), recordingSigner())
     ).rejects.toThrow();
   });
+
+  // The signature is placed over exactly ONE wallet authorization. A hostile
+  // simulation that returns a second copy of the admin root (a later-replayable
+  // duplicate under a fresh nonce), or no wallet entry at all, is refused
+  // before anything is signed.
+  it("refuses two duplicate admin roots with distinct nonces, signing neither", async () => {
+    const tx = await adminTx((top) => [entry(invFromArgs(top)), entry(invFromArgs(top), "8")]);
+    await expect(manager().signAdmin(tx, recordingSigner())).rejects.toThrow();
+    expect(authOf(tx).some(isSigned)).toBe(false);
+  });
+
+  it("refuses a simulation that returns no wallet entry on the admin path", async () => {
+    const tx = await adminTx(() => []);
+    await expect(manager().signAdmin(tx, recordingSigner())).rejects.toThrow();
+  });
+
+  // `adminEntry` is an internal flag. A caller must not be able to smuggle it
+  // through the public options bag to turn off the standalone refusal, nor to
+  // force a wallet-admin root through generic sign().
+  it("closes the adminEntry bypass through public signAuthEntry()", async () => {
+    const otherArgs = await addSignerArgsFor(OTHER);
+    await expect(
+      manager().signAuthEntry(entry(invFromArgs(otherArgs)), recordingSigner(), {
+        adminEntry: true,
+      } as never)
+    ).rejects.toThrow();
+  });
+
+  it("closes the adminEntry switch through public sign()", async () => {
+    const otherArgs = await addSignerArgsFor(OTHER);
+    const tx = await adminTx(() => [entry(invFromArgs(otherArgs))]);
+    await expect(
+      manager().sign(tx, recordingSigner(), { adminEntry: true } as never)
+    ).rejects.toThrow();
+  });
+
+  // A legacy (pre-1.0) wallet administers itself through `update_contract_code`.
+  // The standalone path must refuse it exactly like the current admin names,
+  // for the cohort whose key also signs for a legacy sibling.
+  it("refuses a legacy wallet's update_contract_code on the standalone path", async () => {
+    const root = entryForWallet(LEGACY, inv(LEGACY, "update_contract_code"));
+    await expect(manager().signAuthEntry(root, recordingSigner())).rejects.toThrow();
+
+    const nested = entryForWallet(
+      LEGACY,
+      inv(EVIL, "claim", [inv(LEGACY, "update_contract_code")])
+    );
+    await expect(manager().signAuthEntry(nested, recordingSigner())).rejects.toThrow();
+  });
+
+  // The admin signature's lifetime comes from the kit, never from the
+  // simulation-supplied entry: a hostile RPC must not choose how long a dropped
+  // admin signature stays replayable.
+  it("resolves the admin signature lifetime from the kit, ignoring the simulated ledger", async () => {
+    const tx = await adminTx((top) => [entryForWallet(WALLET, invFromArgs(top), "7", 0xffffffff)]);
+    await manager().signAdmin(tx, recordingSigner());
+    const auth = authOf(tx);
+    expect(auth).toHaveLength(1);
+    expect(isSigned(auth[0]!)).toBe(true);
+    expect(expirationOf(auth[0]!)).toBe(EXPIRATION);
+  });
 });
 
 describe("legacy upgrade signing scope", () => {
@@ -307,5 +399,12 @@ describe("legacy upgrade signing scope", () => {
       await expect(signLegacyUpgradeTx(deps(), tx, recordingSigner())).rejects.toThrow();
       vi.restoreAllMocks();
     }
+  });
+
+  it("refuses two duplicate upgrade roots with distinct nonces, signing neither", async () => {
+    stubSimulation((top) => [entry(invFromArgs(top)), entry(invFromArgs(top), "8")]);
+    const tx = await legacyTx();
+    await expect(signLegacyUpgradeTx(deps(), tx, recordingSigner())).rejects.toThrow();
+    expect(authOf(tx).some(isSigned)).toBe(false);
   });
 });

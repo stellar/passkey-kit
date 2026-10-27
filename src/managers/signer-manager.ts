@@ -39,7 +39,6 @@ import {
   buildEd25519SignerTx,
   buildAddSecp256r1SignerTx,
   buildPolicySignerTx,
-  type PolicySignerTxOptions,
   buildRemoveSignerTx,
   buildSecp256r1SignerTx,
   buildUpgradeTx,
@@ -98,7 +97,12 @@ export class SignerManager {
     signer: Signer = new PasskeySigner(),
     options?: SignOptions
   ): Promise<xdr.SorobanAuthorizationEntry> {
-    return signAuthEntryOp(this.signAuthEntryDeps(), entry, signer, options);
+    // Forward only public fields: a caller must not be able to smuggle the
+    // internal `adminEntry` flag in through the options bag and skip the
+    // wallet-admin / contract-deploy refusal on this un-pinned standalone path.
+    return signAuthEntryOp(this.signAuthEntryDeps(), entry, signer, {
+      expiration: options?.expiration,
+    });
   }
 
   /**
@@ -112,11 +116,13 @@ export class SignerManager {
     signer: Signer = new PasskeySigner(),
     options?: SignOptions
   ): Promise<AssembledTransaction<T>> {
+    // Forward only public fields — never a caller-supplied `adminEntry`, which
+    // would otherwise switch this generic path onto the wallet-admin branch.
     return signOp(
       { ...this.signAuthEntryDeps(), getContractId: this.deps.getContractId },
       txn,
       signer,
-      options
+      { expiration: options?.expiration }
     );
   }
 
@@ -136,7 +142,7 @@ export class SignerManager {
       { ...this.signAuthEntryDeps(), getContractId: this.deps.getContractId },
       txn,
       signer,
-      { ...options, adminEntry: true }
+      { expiration: options?.expiration, adminEntry: true }
     );
   }
 
@@ -214,17 +220,17 @@ export class SignerManager {
   /**
    * Build an `add_signer` transaction for a policy. Throws a
    * {@link ValidationError} if the policy's `install` hook adds
-   * wallet-authorized sub-invocations to the auth entry, unless
-   * `options.allowInstallSubInvocations` is set.
+   * wallet-authorized sub-invocations to the auth entry: the wallet-admin
+   * signing path signs exactly the `add_signer` call and refuses any
+   * sub-invocation, so such a build could never be signed.
    */
   addPolicy(
     policy: string,
     limits: SignerLimits,
     store: SignerStore,
-    expiration?: number,
-    options?: PolicySignerTxOptions
+    expiration?: number
   ): Promise<WalletTx> {
-    return buildPolicySignerTx(this.writeDeps(), "add_signer", policy, limits, store, expiration, options);
+    return buildPolicySignerTx(this.writeDeps(), "add_signer", policy, limits, store, expiration);
   }
 
   updatePolicy(

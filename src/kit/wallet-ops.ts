@@ -198,24 +198,13 @@ export function buildEd25519SignerTx(
   );
 }
 
-/** Options for {@link buildPolicySignerTx}. */
-export interface PolicySignerTxOptions {
-  /**
-   * Allow the policy's `install` hook to add wallet-authorized sub-invocations
-   * to the `add_signer` auth entry. Default `false`: the build throws a
-   * {@link ValidationError} if the simulated entry carries any sub-invocation.
-   */
-  allowInstallSubInvocations?: boolean;
-}
-
 export async function buildPolicySignerTx(
   deps: WalletWriteDeps,
   fn: SignerFn,
   policy: string,
   limits: SignerLimits,
   store: SignerStore,
-  expiration?: number,
-  options?: PolicySignerTxOptions
+  expiration?: number
 ): Promise<WalletTx> {
   const tx = await deps.wallet[fn](
     { signer: buildPolicySigner(policy, limits, store, expiration) },
@@ -226,8 +215,9 @@ export async function buildPolicySignerTx(
   // wallet's authorization is live. Anything the hook `require_auth`s against
   // the wallet is recorded by simulation as a sub-invocation of the
   // `add_signer` root, and a single passkey signature would cover it. A
-  // legitimate install needs no wallet-authorized calls, so refuse by default.
-  if (fn === "add_signer" && !options?.allowInstallSubInvocations) {
+  // legitimate install needs no wallet-authorized calls, and the wallet-admin
+  // signing path refuses any sub-invocation anyway, so refuse at build time.
+  if (fn === "add_signer") {
     assertNoInstallSubInvocations(tx, deps.wallet.options.contractId, policy);
   }
 
@@ -255,8 +245,8 @@ function assertNoInstallSubInvocations(
     if (subs.length > 0) {
       throw new ValidationError(
         `Policy ${policy} install hook requests wallet-authorized sub-invocations ` +
-          `(${subs.join(", ")}). Refusing to build add_signer. Pass ` +
-          `allowInstallSubInvocations: true to override.`,
+          `(${subs.join(", ")}). Refusing to build add_signer: the wallet-admin ` +
+          `signing path signs exactly the add_signer call, never its sub-invocations.`,
         PasskeyKitErrorCode.INVALID_INPUT,
         { policy, subInvocations: subs }
       );

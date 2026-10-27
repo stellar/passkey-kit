@@ -247,7 +247,7 @@ Each method builds an `AssembledTransaction` (`WalletTx`) that wraps one contrac
 | `updateSecp256r1(keyId, limits, store, expiration?)` | `update_signer` | Update a passkey signer's limits/storage/expiration. The public key is re-read from the ledger, never caller-supplied. |
 | `addEd25519(publicKey, limits, store, expiration?)` | `add_signer` | Add an Ed25519 signer (`publicKey` = `G…`). |
 | `updateEd25519(publicKey, limits, store, expiration?)` | `update_signer` | Update an Ed25519 signer. |
-| `addPolicy(policy, limits, store, expiration?, options?)` | `add_signer` | Add a policy signer (`policy` = `C…`). Invokes the policy's `install` hook. Throws `ValidationError` if the hook adds wallet-authorized sub-invocations to the auth entry, unless `options.allowInstallSubInvocations` is set. |
+| `addPolicy(policy, limits, store, expiration?)` | `add_signer` | Add a policy signer (`policy` = `C…`). Invokes the policy's `install` hook. Throws `ValidationError` if the hook adds wallet-authorized sub-invocations to the auth entry, which `signAdmin` would refuse to sign. |
 | `updatePolicy(policy, limits, store, expiration?)` | `update_signer` | Update a policy signer. |
 | `remove(signerKey)` | `remove_signer` | Remove a signer. A policy entry must pass its own `policy__` check. |
 | `upgrade(newWasmHash)` | `upgrade` | Replace the wallet's WASM (`Buffer`/`Uint8Array`, 32 bytes). |
@@ -281,7 +281,7 @@ import { SignerStore, SignerKey } from "passkey-kit";
 
 // Add an unlimited Ed25519 co-signer, stored persistently.
 const tx = await kit.addEd25519("G…", undefined, SignerStore.Persistent);
-await kit.signAdmin(tx);          // wallet-admin write: declares reentry intent
+await kit.signAdmin(tx);          // wallet-admin write: signs exactly this call
 await server.send(tx);
 
 // Remove it.
@@ -292,10 +292,9 @@ await server.send(rm);
 
 Generic dApp calls (transfers, swaps, mints) keep using `kit.sign(tx)`: it
 refuses any wallet-admin call (`add_signer`, `add_secp256r1`, `update_signer`,
-`remove_signer`, `upgrade`) at the entry root or nested beneath it. The only
-legit exception is a nested self-`remove_signer` (the contract lets a limited
-signer remove itself); pass `allowWalletReentry: true` — or `kit.signAdmin(tx)`
-for full admin transactions — to declare that intent.
+`remove_signer`, `upgrade`) at the entry root or nested beneath it. Wallet-admin
+writes go through the dedicated builders and `kit.signAdmin(tx)`, which signs
+exactly the one admin call the transaction invokes.
 
 ## `PasskeyServer` (server)
 

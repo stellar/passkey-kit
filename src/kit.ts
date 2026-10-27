@@ -80,7 +80,6 @@ import {
 import { restoreFootprint } from "./kit/tx-ops.js";
 import {
   buildSecp256r1Signer,
-  type PolicySignerTxOptions,
   type WalletTx,
 } from "./kit/wallet-ops.js";
 import type {
@@ -1093,8 +1092,10 @@ export class PasskeyKit {
   /**
    * Sign a wallet-admin transaction produced by the dedicated builders
    * (`addSecp256r1`, `addEd25519`, `addPolicy`, `update*`, `remove`,
-   * `upgrade`). Declares the wallet-reentry intent the generic `sign()` path
-   * refuses by default.
+   * `upgrade`). Places one signature over exactly the transaction's own
+   * top-level wallet-admin call, with no sub-invocations, and refuses any
+   * extra wallet entry a simulation grafted on. The generic `sign()` path
+   * refuses wallet-admin calls outright.
    */
   signAdmin<T>(
     txn: AssembledTransaction<T>,
@@ -1198,17 +1199,17 @@ export class PasskeyKit {
   }
   /**
    * Add a policy signer. Throws a `ValidationError` if the policy's `install`
-   * hook adds wallet-authorized sub-invocations to the auth entry, unless
-   * `options.allowInstallSubInvocations` is set.
+   * hook adds wallet-authorized sub-invocations to the auth entry: the
+   * wallet-admin signing path signs exactly the `add_signer` call and refuses
+   * any sub-invocation, so such a build could never be signed.
    */
   addPolicy(
     policy: string,
     limits: SignerLimits,
     store: SignerStore,
-    expiration?: number,
-    options?: PolicySignerTxOptions
+    expiration?: number
   ): Promise<WalletTx> {
-    return this.signerManager.addPolicy(policy, limits, store, expiration, options);
+    return this.signerManager.addPolicy(policy, limits, store, expiration);
   }
   updatePolicy(
     policy: string,
