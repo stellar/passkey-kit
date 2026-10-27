@@ -151,18 +151,21 @@ describe("SignerManager signer writes", () => {
     expect(err.context).toEqual({ policy: CONTRACT, subInvocations: [`${TOKEN}.transfer`] });
   });
 
-  it("addPolicy allows sub-invocations with allowInstallSubInvocations", async () => {
+  it("addPolicy refuses install sub-invocations with no override to force them", async () => {
+    // The old `allowInstallSubInvocations` escape hatch is gone: a policy whose
+    // install hook adds wallet-authorized sub-invocations can never be signed
+    // (signAdmin refuses any sub-invocation), so the build refuses it outright.
     const tx = addSignerAuthTx([]);
     tx.simulationData.result.auth[0]!.rootInvocation().subInvocations([tx.transfer()]);
     const { deps, wallet } = makeDeps();
     wallet.add_signer = vi.fn(async () => tx as never);
     const manager = new SignerManager(deps);
 
-    await expect(
-      manager.addPolicy(CONTRACT, undefined, SignerStore.Persistent, undefined, {
-        allowInstallSubInvocations: true,
-      })
-    ).resolves.toBe(tx);
+    const err = await manager
+      .addPolicy(CONTRACT, undefined, SignerStore.Persistent)
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.context).toEqual({ policy: CONTRACT, subInvocations: [`${TOKEN}.transfer`] });
   });
 
   it("updatePolicy does not run the install sub-invocation guard", async () => {

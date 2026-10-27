@@ -48,7 +48,6 @@ export {
   type TransactionFailure,
   type SubmissionMethod,
 } from "./types.js";
-export type { PolicySignerTxOptions } from "./kit/wallet-ops.js";
 
 // Typed errors
 export {

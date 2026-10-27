@@ -2,6 +2,47 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## 0.20.0 — 2026-10-27
+
+Breaking: two signing-option escape hatches are removed, and `signAdmin` now
+pins the admin signature to exactly the transaction's own call.
+
+- **Pinned `signAdmin` to exactly the invoked call.** A Soroban signature
+  covers the whole authorization tree, and the SDK signs every auth entry whose
+  credential address is the connected wallet; those trees come from RPC
+  simulation. `signAdmin` (and the dedicated builders behind it) now place one
+  signature over exactly the transaction's own top-level wallet-admin call,
+  byte-identical to the built envelope, with no sub-invocations. Any extra
+  wallet entry, any sub-invocation under the admin root, any contract-deploy
+  authority, any mismatched root, or a missing/unreadable envelope is refused
+  before anything is signed.
+- **Signed exactly one wallet authorization.** The admin path and
+  `signLegacyUpgradeTx` now count the wallet-credential entries before signing
+  and refuse unless exactly one is present. A simulation that returned a second
+  copy of the admin root under a fresh nonce would otherwise have yielded a
+  second, separately replayable signature.
+- **Resolved the admin signature lifetime from the kit, not the simulation.**
+  The admin path computes `signatureExpirationLedger` from the caller's
+  `expiration` or the kit's own ledger read and ignores the value on the
+  simulated entry, matching what `signLegacyUpgradeTx` already did.
+- **Refused legacy wallet-admin names on the generic and standalone paths.**
+  `update_contract_code` and `migrate_signers` join the wallet-admin refusal
+  set, so a generic `sign()` or a standalone `signAuthEntry()` can never carry
+  a legacy wallet's self-upgrade. The dedicated `signLegacyUpgradeTx` flow is
+  unaffected.
+- **Removed `SignOptions.allowWalletReentry`.** Generic `sign()` /
+  `signAuthEntry()` refuse wallet-admin authority outright; wallet-admin writes
+  go through the dedicated builders and `signAdmin`. Callers that passed the
+  option must drop it.
+- **Removed the `allowInstallSubInvocations` build option on `addPolicy`.** A
+  policy whose `install` hook adds wallet-authorized sub-invocations is refused
+  at build time, because the admin signing path signs exactly the `add_signer`
+  call and would never sign those sub-invocations. The `PolicySignerTxOptions`
+  type is gone.
+- **Kept the internal admin-path flag internal.** The `adminEntry` signing flag
+  is no longer reachable through the public `signAuthEntry` / `sign` option
+  bags, so a forwarded options object cannot switch off the standalone refusal.
+
 ## 0.19.1 — 2026-09-17
 
 - **Pinned what `signLegacyUpgradeTx` will sign.** The auth entry must root at

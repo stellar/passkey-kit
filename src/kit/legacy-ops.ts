@@ -28,7 +28,7 @@ import type { SignerKey } from "../types.js";
 import type { Signer } from "../signers.js";
 import { signerKeyToScVal } from "./auth-payload.js";
 import {
-  assertAdminRootMatchesHostFunction,
+  countWalletEntries,
   signAuthEntry,
   type SignAuthEntryDeps,
   type SignOptions,
@@ -298,7 +298,7 @@ export async function signLegacyUpgradeTx<T>(
   deps: SignAuthEntryDeps & { contractId: string },
   tx: AssembledTransaction<T>,
   signer: Signer,
-  options?: Omit<SignOptions, "allowWalletReentry"> & {
+  options?: SignOptions & {
     /**
      * The only WASM hash an `update_contract_code` call may carry. Defaults to
      * the canonical legacy-line target, so a transaction that would move the
@@ -321,6 +321,21 @@ export async function signLegacyUpgradeTx<T>(
     );
   }
 
+  // Exactly one wallet authorization — this wallet's own upgrade call. Refuse
+  // before signing if a simulation returned extra wallet entries (e.g. a
+  // duplicate upgrade root under a second nonce) or none.
+  const walletEntries = countWalletEntries(
+    (topOp as Operation.InvokeHostFunction).auth ?? [],
+    deps.contractId
+  );
+  if (walletEntries !== 1) {
+    throw new SigningError(
+      `Refusing to sign a legacy upgrade that authorizes ${walletEntries} wallet entries; exactly one (the upgrade call itself) is allowed.`,
+      PasskeyKitErrorCode.SIGNING_FAILED,
+      { contractId: deps.contractId }
+    );
+  }
+
   // Resolve the expiration once here (the kit's own ledger-based default) so
   // the SDK does not fetch it, and pass the same value to every entry.
   const expiration = options?.expiration ?? (await deps.calculateExpiration());
@@ -330,14 +345,17 @@ export async function signLegacyUpgradeTx<T>(
     expiration,
     authorizeEntry: async (entry) => {
       const clone = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
+      // The legacy upgrade pins its own exact root (own `update_contract_code`
+      // / `migrate_signers`, no sub-invocations) and target WASM hash, which is
+      // stricter than the generic wallet-admin walk. Mark the entry
+      // pre-validated so `signAuthEntry` signs this one pinned authorization.
       assertRootIsExactlyThisCall(clone, deps.contractId, topFunc);
       assertUpgradeTarget(clone, options?.expectedTarget ?? LEGACY_UPGRADE_TARGET_WASM_HASH);
-      assertAdminRootMatchesHostFunction(clone, deps.contractId, topFunc);
       const { expectedTarget: _expectedTarget, ...signOptions } = options ?? {};
       return signAuthEntry(deps, clone, signer, {
         ...signOptions,
         expiration,
-        allowWalletReentry: true,
+        adminEntry: true,
       });
     },
   });

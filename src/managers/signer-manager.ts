@@ -39,7 +39,6 @@ import {
   buildEd25519SignerTx,
   buildAddSecp256r1SignerTx,
   buildPolicySignerTx,
-  type PolicySignerTxOptions,
   buildRemoveSignerTx,
   buildSecp256r1SignerTx,
   buildUpgradeTx,
@@ -98,20 +97,43 @@ export class SignerManager {
     signer: Signer = new PasskeySigner(),
     options?: SignOptions
   ): Promise<xdr.SorobanAuthorizationEntry> {
-    return signAuthEntryOp(this.signAuthEntryDeps(), entry, signer, options);
+    // Forward only public fields: a caller must not be able to smuggle the
+    // internal `adminEntry` flag in through the options bag and skip the
+    // wallet-admin / contract-deploy refusal on this un-pinned standalone path.
+    return signAuthEntryOp(this.signAuthEntryDeps(), entry, signer, {
+      expiration: options?.expiration,
+    });
   }
 
   /**
-   * Sign an assembled transaction's wallet auth entries.
-   *
-   * Wallet-admin entries (the transaction's own `add_signer` /
-   * `add_secp256r1` / `update_signer` / `remove_signer` / `upgrade` produced
-   * by the dedicated builders below) must explicitly opt in with
-   * `options.allowWalletReentry: true`. Generic dApp `sign()` calls leave the
-   * default `false`, so a hostile transaction rooting an entry at a
-   * wallet-admin call is refused.
+   * Sign an assembled transaction's wallet auth entries as a generic dApp
+   * call. Every entry runs the full wallet-admin / contract-deploy refusal, so
+   * a hostile transaction rooting (or nesting) an entry at a wallet-admin call
+   * is rejected. Wallet-admin writes go through {@link signAdmin}, not here.
    */
   sign<T>(
+    txn: AssembledTransaction<T>,
+    signer: Signer = new PasskeySigner(),
+    options?: SignOptions
+  ): Promise<AssembledTransaction<T>> {
+    // Forward only public fields — never a caller-supplied `adminEntry`, which
+    // would otherwise switch this generic path onto the wallet-admin branch.
+    return signOp(
+      { ...this.signAuthEntryDeps(), getContractId: this.deps.getContractId },
+      txn,
+      signer,
+      { expiration: options?.expiration }
+    );
+  }
+
+  /**
+   * Sign a wallet-admin transaction built by one of the dedicated builders
+   * below. Signs exactly the transaction's own top-level admin call: the
+   * single wallet authorization is pinned to that call with no
+   * sub-invocations, and any extra wallet entry a simulation grafted on is
+   * refused.
+   */
+  signAdmin<T>(
     txn: AssembledTransaction<T>,
     signer: Signer = new PasskeySigner(),
     options?: SignOptions
@@ -120,21 +142,8 @@ export class SignerManager {
       { ...this.signAuthEntryDeps(), getContractId: this.deps.getContractId },
       txn,
       signer,
-      options
+      { expiration: options?.expiration, adminEntry: true }
     );
-  }
-
-  /**
-   * Sign a wallet-admin transaction built by one of the dedicated builders
-   * below. Declares the wallet-reentry intent the generic `sign()` path
-   * refuses by default.
-   */
-  signAdmin<T>(
-    txn: AssembledTransaction<T>,
-    signer: Signer = new PasskeySigner(),
-    options?: Omit<SignOptions, "allowWalletReentry">
-  ): Promise<AssembledTransaction<T>> {
-    return this.sign(txn, signer, { ...options, allowWalletReentry: true });
   }
 
   // -- Signer writes -----------------------------------------------------------
@@ -211,17 +220,17 @@ export class SignerManager {
   /**
    * Build an `add_signer` transaction for a policy. Throws a
    * {@link ValidationError} if the policy's `install` hook adds
-   * wallet-authorized sub-invocations to the auth entry, unless
-   * `options.allowInstallSubInvocations` is set.
+   * wallet-authorized sub-invocations to the auth entry: the wallet-admin
+   * signing path signs exactly the `add_signer` call and refuses any
+   * sub-invocation, so such a build could never be signed.
    */
   addPolicy(
     policy: string,
     limits: SignerLimits,
     store: SignerStore,
-    expiration?: number,
-    options?: PolicySignerTxOptions
+    expiration?: number
   ): Promise<WalletTx> {
-    return buildPolicySignerTx(this.writeDeps(), "add_signer", policy, limits, store, expiration, options);
+    return buildPolicySignerTx(this.writeDeps(), "add_signer", policy, limits, store, expiration);
   }
 
   updatePolicy(
