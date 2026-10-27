@@ -1,6 +1,6 @@
 # Legacy code inventory
 
-Last reviewed: 2026-10-27 (against `main` at `74210a4`, `passkey-kit@0.19.1`).
+Last reviewed: 2026-10-27 (against `main` at `d7fb6bd`, `passkey-kit@0.20.0`).
 
 This repo is forward-only: every line must earn its keep. This document lists
 the code that looks like legacy, says why it is still here, and says what
