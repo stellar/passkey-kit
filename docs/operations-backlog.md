@@ -44,19 +44,7 @@ its evidence (date, commit, tx hashes, deployment id) in the commit message.
 - **Done when:** the worker's latest deployment is built from current `main`,
   and the demo can still fund and transfer through it (item 1, layers 30–31).
 
-## 4. Tag `v0.20.0`
-
-- **What:** `passkey-kit@0.20.0` was published to npm on 2026-10-27 without a
-  git tag. [`releasing.md`](./releasing.md) requires a tag on the commit that
-  produced the package. npm did not record a `gitHead`. The release commit is
-  `d7fb6bd` (merge of #24); the only later commit before the publish,
-  `7d591d3`, changed docs only.
-- **How:** `git tag v0.20.0 d7fb6bd && git push origin v0.20.0`. GitHub
-  Releases stop at v0.18.3; adding releases for v0.19.0, v0.19.1, and v0.20.0
-  is optional.
-- **Done when:** `v0.20.0` resolves to `d7fb6bd` on `origin`.
-
-## 5. Confirm the `contracts-legacy` Dependabot freeze
+## 4. Confirm the `contracts-legacy` Dependabot freeze
 
 - **What:** [`.github/dependabot.yml`](../.github/dependabot.yml) ignores all
   Cargo updates in `/contracts-legacy`, because any lock change moves the
