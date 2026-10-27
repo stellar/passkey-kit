@@ -587,6 +587,7 @@ pnpm verify:bindings  # assert the committed bindings match the canonical WASM
 - **[docs/legacy-wallet-upgrade.md](./docs/legacy-wallet-upgrade.md)** — in-place upgrade for pre-fix legacy wallets (known-vulnerable WASM hashes in [SECURITY.md](./SECURITY.md)).
 - **[docs/legacy-code-inventory.md](./docs/legacy-code-inventory.md)** — what legacy code remains, why, and what removing it would break.
 - **[docs/releasing.md](./docs/releasing.md)** — the dependency-ordered publish flow.
+- **[docs/operations-backlog.md](./docs/operations-backlog.md)** — open release, test, and deploy tasks.
 
 ## Resources
 
