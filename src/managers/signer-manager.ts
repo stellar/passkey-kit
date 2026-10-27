@@ -102,14 +102,10 @@ export class SignerManager {
   }
 
   /**
-   * Sign an assembled transaction's wallet auth entries.
-   *
-   * Wallet-admin entries (the transaction's own `add_signer` /
-   * `add_secp256r1` / `update_signer` / `remove_signer` / `upgrade` produced
-   * by the dedicated builders below) must explicitly opt in with
-   * `options.allowWalletReentry: true`. Generic dApp `sign()` calls leave the
-   * default `false`, so a hostile transaction rooting an entry at a
-   * wallet-admin call is refused.
+   * Sign an assembled transaction's wallet auth entries as a generic dApp
+   * call. Every entry runs the full wallet-admin / contract-deploy refusal, so
+   * a hostile transaction rooting (or nesting) an entry at a wallet-admin call
+   * is rejected. Wallet-admin writes go through {@link signAdmin}, not here.
    */
   sign<T>(
     txn: AssembledTransaction<T>,
@@ -126,15 +122,22 @@ export class SignerManager {
 
   /**
    * Sign a wallet-admin transaction built by one of the dedicated builders
-   * below. Declares the wallet-reentry intent the generic `sign()` path
-   * refuses by default.
+   * below. Signs exactly the transaction's own top-level admin call: the
+   * single wallet authorization is pinned to that call with no
+   * sub-invocations, and any extra wallet entry a simulation grafted on is
+   * refused.
    */
   signAdmin<T>(
     txn: AssembledTransaction<T>,
     signer: Signer = new PasskeySigner(),
-    options?: Omit<SignOptions, "allowWalletReentry">
+    options?: SignOptions
   ): Promise<AssembledTransaction<T>> {
-    return this.sign(txn, signer, { ...options, allowWalletReentry: true });
+    return signOp(
+      { ...this.signAuthEntryDeps(), getContractId: this.deps.getContractId },
+      txn,
+      signer,
+      { ...options, adminEntry: true }
+    );
   }
 
   // -- Signer writes -----------------------------------------------------------

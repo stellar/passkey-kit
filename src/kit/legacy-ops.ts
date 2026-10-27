@@ -28,7 +28,6 @@ import type { SignerKey } from "../types.js";
 import type { Signer } from "../signers.js";
 import { signerKeyToScVal } from "./auth-payload.js";
 import {
-  assertAdminRootMatchesHostFunction,
   signAuthEntry,
   type SignAuthEntryDeps,
   type SignOptions,
@@ -298,7 +297,7 @@ export async function signLegacyUpgradeTx<T>(
   deps: SignAuthEntryDeps & { contractId: string },
   tx: AssembledTransaction<T>,
   signer: Signer,
-  options?: Omit<SignOptions, "allowWalletReentry"> & {
+  options?: SignOptions & {
     /**
      * The only WASM hash an `update_contract_code` call may carry. Defaults to
      * the canonical legacy-line target, so a transaction that would move the
@@ -330,14 +329,17 @@ export async function signLegacyUpgradeTx<T>(
     expiration,
     authorizeEntry: async (entry) => {
       const clone = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
+      // The legacy upgrade pins its own exact root (own `update_contract_code`
+      // / `migrate_signers`, no sub-invocations) and target WASM hash, which is
+      // stricter than the generic wallet-admin walk. Mark the entry
+      // pre-validated so `signAuthEntry` signs this one pinned authorization.
       assertRootIsExactlyThisCall(clone, deps.contractId, topFunc);
       assertUpgradeTarget(clone, options?.expectedTarget ?? LEGACY_UPGRADE_TARGET_WASM_HASH);
-      assertAdminRootMatchesHostFunction(clone, deps.contractId, topFunc);
       const { expectedTarget: _expectedTarget, ...signOptions } = options ?? {};
       return signAuthEntry(deps, clone, signer, {
         ...signOptions,
         expiration,
-        allowWalletReentry: true,
+        adminEntry: true,
       });
     },
   });

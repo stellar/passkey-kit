@@ -1053,7 +1053,7 @@ export class PasskeyKit {
     tx: AssembledTransaction<T>,
     contractId: string,
     signer: Signer = new PasskeySigner("any"),
-    options?: Omit<SignOptions, "allowWalletReentry"> & { expectedTarget?: string }
+    options?: SignOptions & { expectedTarget?: string }
   ): Promise<AssembledTransaction<T>> {
     return signLegacyUpgradeTx(
       {
@@ -1099,7 +1099,7 @@ export class PasskeyKit {
   signAdmin<T>(
     txn: AssembledTransaction<T>,
     signer?: Signer,
-    options?: Omit<SignOptions, "allowWalletReentry">
+    options?: SignOptions
   ): Promise<AssembledTransaction<T>> {
     return this.signerManager.signAdmin(txn, signer, options);
   }

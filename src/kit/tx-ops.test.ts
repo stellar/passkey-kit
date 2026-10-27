@@ -21,7 +21,7 @@ import {
 import type { Spec as ContractSpec } from "@stellar/stellar-sdk/contract";
 import { Client as PasskeyClient } from "passkey-kit-sdk";
 import {
-  assertAdminRootMatchesHostFunction,
+  assertAdminEntryMatchesHostFunction,
   signAuthEntry,
   type SignAuthEntryDeps,
 } from "./tx-ops.js";
@@ -329,18 +329,17 @@ describe("signAuthEntry V2 address binding", () => {
     ).rejects.toBeInstanceOf(SigningError);
   });
 
-  it("allows wallet-admin authority with allowWalletReentry: true", async () => {
+  it("refuses wallet-admin authority on the standalone signAuthEntry path", async () => {
+    // Standalone signAuthEntry has no transaction envelope to pin the root
+    // against, so a wallet-admin root is necessarily unverifiable here and is
+    // refused. Legit admin writes go through signAdmin(), which pins the entry.
     const entry = entryWithRoot(WALLET_A, walletInvocation(WALLET_A, "add_signer", []));
-    const payloads: Buffer[] = [];
-    const signed = await signAuthEntry(makeDeps(), entry, capturingSigner(payloads), {
-      expiration: 123,
-      allowWalletReentry: true,
-    });
-    expect(payloads).toHaveLength(1);
-    expect(signed.credentials().switch().name).toBe("sorobanCredentialsAddressV2");
+    await expect(
+      signAuthEntry(makeDeps(), entry, capturingSigner([]), { expiration: 123 })
+    ).rejects.toBeInstanceOf(SigningError);
   });
 
-  it("refuses an admin root whose arguments differ from the transaction", () => {
+  it("refuses an admin entry whose arguments differ from the transaction", () => {
     const entry = entryWithRoot(
       WALLET_A,
       walletInvocation(WALLET_A, "add_signer", [])
@@ -354,7 +353,61 @@ describe("signAuthEntry V2 address binding", () => {
     );
 
     expect(() =>
-      assertAdminRootMatchesHostFunction(entry, WALLET_A, hostFunction)
+      assertAdminEntryMatchesHostFunction(entry, WALLET_A, hostFunction)
+    ).toThrow(SigningError);
+  });
+
+  it("accepts the exact wallet-admin entry the transaction invokes", () => {
+    // The dedicated-builder shape: root is the connected wallet's own admin
+    // call, no sub-invocations, byte-identical to the top-level host function.
+    const root = walletInvocation(WALLET_A, "add_signer", []);
+    const entry = entryWithRoot(WALLET_A, root);
+    const rootArgs = root.function().contractFn();
+    const hostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
+      new xdr.InvokeContractArgs({
+        contractAddress: rootArgs.contractAddress(),
+        functionName: rootArgs.functionName(),
+        args: rootArgs.args(),
+      })
+    );
+    expect(() =>
+      assertAdminEntryMatchesHostFunction(entry, WALLET_A, hostFunction)
+    ).not.toThrow();
+  });
+
+  it("refuses a wallet-admin entry that carries sub-invocations", () => {
+    const root = walletInvocation(WALLET_A, "add_signer", [
+      walletInvocation(WALLET_A, "add_signer", []),
+    ]);
+    const entry = entryWithRoot(WALLET_A, root);
+    const rootArgs = root.function().contractFn();
+    const hostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
+      new xdr.InvokeContractArgs({
+        contractAddress: rootArgs.contractAddress(),
+        functionName: rootArgs.functionName(),
+        args: rootArgs.args(),
+      })
+    );
+    expect(() =>
+      assertAdminEntryMatchesHostFunction(entry, WALLET_A, hostFunction)
+    ).toThrow(SigningError);
+  });
+
+  it("refuses a non-admin wallet entry on the wallet-admin path", () => {
+    // A second entry a malicious simulation grafts on — here a bare transfer
+    // rooted at the wallet — is not the transaction's admin call, so it is
+    // refused even though it would otherwise be a detachable authorization.
+    const root = walletInvocation(WALLET_A, "transfer", []);
+    const entry = entryWithRoot(WALLET_A, root);
+    const adminHostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
+      new xdr.InvokeContractArgs({
+        contractAddress: Address.fromString(WALLET_A).toScAddress(),
+        functionName: "add_signer",
+        args: [],
+      })
+    );
+    expect(() =>
+      assertAdminEntryMatchesHostFunction(entry, WALLET_A, adminHostFunction)
     ).toThrow(SigningError);
   });
 
