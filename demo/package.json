@@ -14,7 +14,7 @@
     "e2e:audit": "MODE=audit bash ../scripts/e2e/testnet-passkey-smoke.sh"
   },
   "devDependencies": {
-    "@stellar/stellar-sdk": "16.3.0",
+    "@stellar/stellar-sdk": "16.4.1",
     "@sveltejs/vite-plugin-svelte": "^5.1.1",
     "@tsconfig/svelte": "^5.0.8",
     "base64url": "^3.0.1",
