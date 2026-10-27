@@ -137,3 +137,5 @@ Publishing the npm packages does **not** deploy contracts, the indexer, or the w
   See [`indexer-signer-provenance-response.md`](./indexer-signer-provenance-response.md).
 - **Relayer-proxy worker** (Cloudflare): [`relayer-proxy/README.md`](../relayer-proxy/README.md) (`pnpm deploy` / `pnpm deploy:production`).
 - **Demo** (Cloudflare Pages): root `wrangler.toml`, `pnpm run deploy:demo` / `deploy:demo:prod`.
+
+Open deploy and test tasks are tracked in [`operations-backlog.md`](./operations-backlog.md).
