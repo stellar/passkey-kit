@@ -49,6 +49,22 @@ The canonical hash remains `97ce047884106b1c6c3bb40b8973cc48db1c4dad95c9e20462bf
 
 Both packages enter through native Soroban host testing dependencies. Neither package is in the `wasm32v1-none` contract dependency graph.
 
+### Legacy line (`contracts-legacy/`)
+
+`contracts-legacy/Cargo.lock` is frozen. Every lock entry is a build input of the upgrade target `c079d3a4136eb6ca68eb724acd3d8af11b0be4a0ed82605925a6dfd4dd83a97c`.
+
+A lock change produces a different WASM hash on the canonical host. The `soroban-sdk@23.5.3` update rebuilds to `b7a0d86a…`. The `serde_with`, `time`, `rand`, and `keccak` updates alone rebuild to `08102e98…`.
+
+`.github/dependabot.yml` ignores all Cargo updates in this directory for that reason.
+
+The `soroban-sdk` advisory GHSA-4chv-4c6w-w254 does not apply. No trait function in the contract shares a name with an inherent function.
+
+The `soroban-sdk` advisory GHSA-x2hw-px52-wp4m does not apply. The contract does not use `Fr` types.
+
+The `serde_with` advisory GHSA-7gcf-g7xr-8hxj does not apply. `serde_with` enters only through the `soroban-sdk-macros` proc-macro, and nothing uses `KeyValueMap`.
+
+A replacement upgrade target must update these packages and publish a reviewed replacement hash together.
+
 ## Secret scanning
 
 The secret scanner recognizes only public contract identifiers, published hashes, generated bundles, and test placeholders.

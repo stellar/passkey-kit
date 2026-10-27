@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # contracts-legacy/Cargo.lock is a build input of the published upgrade
+  # target (c079d3a4…). Any lock change alters the WASM hash, so the lock is
+  # frozen. Security updates honor this ignore rule. See SECURITY.md,
+  # "Legacy line (contracts-legacy/)".
+  - package-ecosystem: cargo
+    directory: /contracts-legacy
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "*"
