@@ -36,11 +36,24 @@ its evidence (date, commit, tx hashes, deployment id) in the commit message.
 ## 3. Redeploy the testnet relayer-proxy worker
 
 - **What:** `passkey-kit-relayer-proxy` was last deployed on 2026-09-01. Its
-  `src/` and `wrangler.toml` have not changed since, but `a345699` moved
-  `@openzeppelin/relayer-plugin-channels` from 0.20 to 0.21 and dropped the
-  `sharp`/`toml` overrides. The live worker still bundles the old tree.
-- **How:** `cd relayer-proxy && pnpm deploy` (testnet only). Do not deploy
-  `--env production`; there is no mainnet relayer by policy.
+  `src/` and `wrangler.toml` have not changed since. The deploy predates both
+  the 2026-09-08 `sharp`/`toml` overrides and `a345699`, which moved
+  `@openzeppelin/relayer-plugin-channels` from 0.20 to 0.21 and dropped those
+  overrides. The live worker still bundles the lockfile at the deploy
+  (`60c0b7f`): plugin 0.20.0, `@stellar/stellar-sdk` 14.6.1, and `toml`
+  3.0.0. `pnpm audit` flags that chain. The worker never parses TOML, so the
+  risk is low.
+- **How:** testnet only. Do not deploy `--env production`; there is no
+  mainnet relayer by policy.
+
+  ```bash
+  cd relayer-proxy
+  pnpm install --frozen-lockfile --ignore-workspace
+  pnpm test
+  pnpm typecheck
+  pnpm deploy
+  pnpm exec wrangler deployments list   # confirm a deployment newer than 2026-09-01
+  ```
 - **Done when:** the worker's latest deployment is built from current `main`,
   and the demo can still fund and transfer through it (item 1, layers 30–31).
 
