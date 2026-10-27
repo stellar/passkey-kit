@@ -97,3 +97,24 @@ The tests cover operation/contract rejection, V2 wallet auth, deploy source and
 WASM checks, resource-fee ceilings, rate limiting, mint-after-validation
 ordering, missing-IP rejection, terminal-status gating, exact-origin CORS,
 error mapping, retry backoff, and both Durable Objects.
+
+## Pending deploy (TODO)
+
+The live testnet Worker was last deployed on 2026-09-01. It is older than the
+2026-09-08 `sharp`/`toml` overrides and older than PR #27, which moved
+`@openzeppelin/relayer-plugin-channels` to `^0.21.0` and removed those
+overrides. The live Worker still bundles plugin 0.20.0, which depends on
+`@stellar/stellar-sdk` 14 and `toml` 4.2.0 (flagged by `pnpm audit`). The
+Worker never parses TOML, so the risk is low, but the live code does not match
+`main`.
+
+To close this item, deploy from `main`, then delete this section:
+
+```sh
+cd relayer-proxy
+pnpm install --frozen-lockfile --ignore-workspace
+pnpm test
+pnpm typecheck
+pnpm deploy
+pnpm exec wrangler deployments list   # confirm a new deployment after 2026-10-27
+```

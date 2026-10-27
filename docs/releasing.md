@@ -135,5 +135,5 @@ Publishing the npm packages does **not** deploy contracts, the indexer, or the w
   This check did not independently verify mainnet v2 responses.
   The SDK fails closed for incomplete, stale, malformed, or ambiguous responses.
   See [`indexer-signer-provenance-response.md`](./indexer-signer-provenance-response.md).
-- **Relayer-proxy worker** (Cloudflare): [`relayer-proxy/README.md`](../relayer-proxy/README.md) (`pnpm deploy` / `pnpm deploy:production`).
+- **Relayer-proxy worker** (Cloudflare): [`relayer-proxy/README.md`](../relayer-proxy/README.md) (`pnpm deploy` / `pnpm deploy:production`). If that README has a "Pending deploy" section, the live Worker is behind `main`.
 - **Demo** (Cloudflare Pages): root `wrangler.toml`, `pnpm run deploy:demo` / `deploy:demo:prod`.
