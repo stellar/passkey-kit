@@ -15,8 +15,8 @@ importers:
         specifier: ^16.3.0
         version: 16.4.1
       hono:
-        specifier: ^4.13.7
-        version: 4.13.14
+        specifier: ^4.13.19
+        version: 4.13.19
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260908.1
@@ -785,8 +785,8 @@ packages:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
 
-  hono@4.13.14:
-    resolution: {integrity: sha512-yhRLQ21U6qa9Hsu2N7Qcbh8tE+WKEcoErjIo56LeSGiGXGp9sA7UpE86Ui9uexb61KakiGwuHMn2QdV7w6i6kQ==}
+  hono@4.13.19:
+    resolution: {integrity: sha512-KmXvQAXwcAHV+muzbIwoJ23niEB5nMoDVr9WcRkU8mvjUECm/1+7v4Jgp7P7a+H6MLFrh+vXrGonGrGS+RQfkA==}
     engines: {node: '>=16.9.0'}
 
   https-proxy-agent@5.0.1:
@@ -1694,7 +1694,7 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hono@4.13.14: {}
+  hono@4.13.19: {}
 
   https-proxy-agent@5.0.1:
     dependencies:
