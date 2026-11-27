@@ -240,6 +240,9 @@ if [[ "$(ab get count "$ED_ROW" 2>/dev/null | tr -d '[:space:]')" != "0" ]]; the
   wait_idle
   ab click "$ED_ROW [data-testid=\"signer-update\"]" >/dev/null 2>&1 || fail "update control missing"
   sleep 1
+  # Switch the Ed25519 signer from restricted to unlimited so update mutates limits on-chain
+  # and layer 44 can verify a real transfer authorized by this updated signer.
+  ab click "$ED_ROW [data-testid=\"limits-mode-unlimited\"]" >/dev/null 2>&1 || fail "limits-mode-unlimited missing"
   before="$(log_line_count)"
   ab click "$ED_ROW [data-testid=\"signer-update-save\"]" >/dev/null 2>&1 || fail "update-save missing"
   case "$(wait_new_log "$before" "Update Ed25519 signer ✓" "Update Ed25519 signer failed" 150; echo $?)" in

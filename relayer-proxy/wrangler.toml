@@ -39,10 +39,13 @@ ALLOWED_ORIGINS = "https://passkey-kit-demo.pages.dev"
 # Explicit contract IDs are optional; approved instances are otherwise verified
 # by their on-chain WASM hash through STELLAR_RPC_URL.
 ALLOWED_WALLET_CONTRACT_IDS = ""
+# Optional CSV of approved custom SEP-41 token contract IDs. Empty permits only
+# Stellar Asset Contracts (verified on-chain) for sponsored direct transfers.
+ALLOWED_TOKEN_CONTRACT_IDS = ""
 ALLOWED_WALLET_WASM_HASHES = "97ce047884106b1c6c3bb40b8973cc48db1c4dad95c9e20462bf2c701daa764e"
 ALLOWED_WALLET_FUNCTIONS = "add_signer,add_secp256r1,update_signer,remove_signer,upgrade"
 ALLOWED_DEPLOYER_ADDRESSES = "GC2C7AWLS2FMFTQAHW3IBUB4ZXVP4E37XNLEF2IK7IVXBB6CMEPCSXFO"
-MAX_RESOURCE_FEE_STROOPS = "1000000"
+MAX_RESOURCE_FEE_STROOPS = "10000000"
 RATE_LIMIT_WINDOW_SECONDS = "60"
 RATE_LIMIT_PER_IP = "10"
 RATE_LIMIT_GLOBAL = "100"

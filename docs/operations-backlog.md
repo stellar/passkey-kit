@@ -1,68 +1,30 @@
 # Operations backlog
 
-Last reviewed: 2026-10-27 (against `main` at `c6dab0a`, `passkey-kit@0.20.0`).
+Last reviewed: 2026-11-27 (against `main`, `passkey-kit@0.20.0` + post-0.20.0 hardening).
 
 Open release, test, and deploy tasks that are not code changes. Each item says
 how to check it and when it is done. Remove an item when it is done, and put
 its evidence (date, commit, tx hashes, deployment id) in the commit message.
 
-## 1. Run the testnet browser e2e against 0.20.0
-
-- **What:** 0.20.0 changed how `signAdmin` signs `addSigner`, `updateSigner`,
-  `removeSigner`, and `addPolicy`. Its unit tests use a stubbed RPC. No
-  testnet browser run against 0.20.0 is recorded.
-- **How:** build the SDK and the demo, serve the demo locally, then run
-  `pnpm run e2e:audit` from `demo/`
-  ([`testnet-passkey-smoke.sh`](../scripts/e2e/testnet-passkey-smoke.sh)).
-  Layers 40–45 (add-secp, add-ed25519, add-policy, update, per-signer
-  transfer, remove) cover the changed path. A skipped layer is not a pass.
-- **Done when:** a full run passes on a commit that contains 0.20.0. Do this
-  before item 2.
-
-## 2. Reconnect and redeploy the demo
+## 1. Reconnect Cloudflare Pages Git integration for `passkey-kit-demo`
 
 - **What:** the Cloudflare Pages project `passkey-kit-demo` is still linked to
-  the archived `kalepail/passkey-kit` repository. Pushes to
-  `stellar/passkey-kit` do not start a build. The last production deploy is
-  `95b60c1` (0.17.1) on 2026-09-01, so the live demo does not include
-  0.18.0–0.20.0. The contract hash in `demo/.env.production` is current.
-- **How:** link the Pages project to `stellar/passkey-kit` (production branch
-  `main`). This needs the Cloudflare GitHub app on the `stellar` org. A manual
-  deploy (`pnpm run deploy:demo:prod`) updates the site but does not fix the
-  link.
-- **Done when:** a push to `main` starts a Pages build, and the live
-  production deployment comes from current `main`.
+  the archived `kalepail/passkey-kit` repository, so pushes to
+  `stellar/passkey-kit` do not trigger automatic Git builds. The live
+  production site (`https://passkey-kit-demo.pages.dev`) was manually deployed
+  from current `main` on 2026-11-27, so it serves current `0.20.0+` code, but
+  automatic push-to-deploy remains unlinked.
+- **How:** in the Cloudflare Dashboard, authorize the Cloudflare GitHub App on
+  the `stellar` org and reconnect `passkey-kit-demo` to `stellar/passkey-kit`
+  (production branch `main`).
+- **Done when:** a push to `stellar/passkey-kit` `main` automatically starts a
+  Cloudflare Pages production build.
 
-## 3. Redeploy the testnet relayer-proxy worker
-
-- **What:** `passkey-kit-relayer-proxy` was last deployed on 2026-09-01. Its
-  `src/` and `wrangler.toml` have not changed since. The deploy predates both
-  the 2026-09-08 `sharp`/`toml` overrides and `a345699`, which moved
-  `@openzeppelin/relayer-plugin-channels` from 0.20 to 0.21 and dropped those
-  overrides. The live worker still bundles the lockfile at the deploy
-  (`60c0b7f`): plugin 0.20.0, `@stellar/stellar-sdk` 14.6.1, and `toml`
-  3.0.0. `pnpm audit` flags that chain. The worker never parses TOML, so the
-  risk is low.
-- **How:** testnet only. Do not deploy `--env production`; there is no
-  mainnet relayer by policy.
-
-  ```bash
-  cd relayer-proxy
-  pnpm install --frozen-lockfile --ignore-workspace
-  pnpm test
-  pnpm typecheck
-  pnpm deploy
-  pnpm exec wrangler deployments list   # confirm a deployment newer than 2026-09-01
-  ```
-- **Done when:** the worker's latest deployment is built from current `main`,
-  and the demo can still fund and transfer through it (item 1, layers 30–31).
-
-## 4. Confirm the `contracts-legacy` Dependabot freeze
-
-- **What:** [`.github/dependabot.yml`](../.github/dependabot.yml) ignores all
-  Cargo updates in `/contracts-legacy`, because any lock change moves the
-  upgrade-target hash (see `SECURITY.md`, "Legacy line"). No Dependabot run has
-  happened since the rule merged.
-- **How:** after the next Dependabot run, check that it opened no
-  `contracts-legacy` PR. Close any such PR; do not merge it.
-- **Done when:** one Dependabot run completes with no new `contracts-legacy` PR.
+*(Completed on 2026-11-27: full testnet browser E2E audit across all 13 layers
+10–51 with zero skips on contract `CASNSHIXMHVNCLX4KWTLT55OKZERSPDP5YHPVE5LYDWY4HHUJFPP4VBK`
+— deploy tx `4fa12b551b2c23002babd8f5be8bf95d363fb9d9792647533b22990ef147b0b9`,
+transfer tx `f99fdd7f7dab477d28b19ed7134767e46aece0fc847b778a06cecdbb2a19a86e`;
+testnet `passkey-kit-relayer-proxy` redeployed from current `main`; live
+`passkey-kit-demo` deployed via Wrangler Pages; and `contracts-legacy`
+Dependabot freeze confirmed with 0 new legacy Cargo PRs and all 9 frozen alerts
+classified in `SECURITY.md`.)*

@@ -788,4 +788,30 @@ describe("legacy wallet code", () => {
     });
     expect(result.contractId).toBe(birth.contractId);
   });
+
+  it("treats Option<u64>::None decoded as [null] as non-expiring during connectWallet", async () => {
+    const kit = makeKit();
+    stubProvenance(kit);
+    const pub = Buffer.alloc(65, 9);
+    pub[0] = 0x04;
+    vi.spyOn(
+      (kit as unknown as { signerManager: { getSigner: () => Promise<unknown> } }).signerManager,
+      "getSigner"
+    ).mockResolvedValue({
+      tag: "Secp256r1",
+      values: [pub, [null], [null]],
+    });
+    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue(instanceWithWasm(WASM_HASH) as never);
+    vi.spyOn(kit.rpc, "getTransaction").mockImplementation(txStub([birth]) as never);
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({
+      sequence: 40,
+      closeTime: "1795796000",
+    } as never);
+
+    const result = await kit.connectWallet({
+      keyId: KEY_ID_B64,
+      getWalletCandidates: async () => completeLookup([birth], 40),
+    });
+    expect(result.contractId).toBe(birth.contractId);
+  });
 });

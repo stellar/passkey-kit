@@ -61,7 +61,13 @@ The `soroban-sdk` advisory GHSA-4chv-4c6w-w254 does not apply. No trait function
 
 The `soroban-sdk` advisory GHSA-x2hw-px52-wp4m does not apply. The contract does not use `Fr` types.
 
+The `soroban-sdk` advisory GHSA-96xm-fv9w-pf3f does not apply. The legacy contract never calls `Bytes::slice`, `Vec::slice`, or `GenRange::gen_range`.
+
 The `serde_with` advisory GHSA-7gcf-g7xr-8hxj does not apply. `serde_with` enters only through the `soroban-sdk-macros` proc-macro, and nothing uses `KeyValueMap`.
+
+The `stellar-xdr` advisory GHSA-x57h-xx53-v53w does not apply. `stellar-xdr` enters only via proc-macro / build-time codegen in `contracts-legacy`, and the contract never calls `StringM::from_str`.
+
+The `rand` (GHSA-cq8v-f236-94qc), `soroban-env-host` (GHSA-pm4j-7r4q-ccg8), `keccak` (GHSA-3288-p39f-rqpv), and `time` (GHSA-r6v5-fh4h-64xc) advisories do not apply to the contract artifact: `cargo tree --target wasm32v1-none --edges normal` confirms none of those four crates is in the `wasm32v1-none` runtime dependency graph (native/host test dependencies only).
 
 A replacement upgrade target must update these packages and publish a reviewed replacement hash together.
 

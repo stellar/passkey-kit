@@ -11,7 +11,10 @@
   let kind = $state<SignerKind>("Secp256r1");
   let name = $state("Session key");
   let store = $state<SignerStore>(SignerStore.Temporary);
-  let limits = $state<LimitsSpec>({ mode: "restricted", entries: [] });
+  let limits = $state<LimitsSpec>({
+    mode: "restricted",
+    entries: config.nativeContractId ? [{ contract: config.nativeContractId, keys: [] }] : [],
+  });
   let useExpiry = $state(true);
   let expiryDays = $state(30);
 

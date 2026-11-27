@@ -2,6 +2,19 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
+## Unreleased
+
+- **Fixed `connectWallet` crashing on non-expiring passkey signers.** `ContractSpec.scValToNative` decodes `Option<u64>::None` on `SignerVal` as `[null]` rather than `[undefined]`; `src/kit.ts` now checks `expiration != null` instead of `expiration !== undefined`.
+- **Preserved signature expiration across sequential `signAdmin()` co-signers.** When an admin auth entry already carries a co-signer's signature, `signAdmin()` now preserves its `signatureExpirationLedger` instead of recomputing a new ledger on each call, and refuses a conflicting explicit `expiration` option.
+- **Scoped `signAdmin()` to the 5 v1 wallet-admin functions** (`add_signer`, `add_secp256r1`, `update_signer`, `remove_signer`, `upgrade`), excluding legacy `update_contract_code` and `migrate_signers` (which stay restricted to `signLegacyUpgradeTx` and refused on generic/standalone signing paths).
+- **Refused known-vulnerable WASM hashes in `upgrade()` (`buildUpgradeTx`).**
+- **Relayer proxy (`relayer-proxy/`):**
+  - Added fail-closed direct token `transfer()` sponsorship for allowlisted wallets targeting verified Stellar Asset Contracts (or optional `ALLOWED_TOKEN_CONTRACT_IDS`), requiring a single V2 address-bound wallet auth entry with zero sub-invocations.
+  - Added Workers-safe `cache: "no-store"` fetch options on `ChannelsClient` and calibrated `MAX_RESOURCE_FEE_STROOPS` to `10000000` (1.0 XLM) to cover real v1 wallet deployments (~0.51 XLM on testnet).
+  - Removed the stale `deploy:production` script to match the testnet-only policy.
+- **Demo (`demo/`):** submitted `fundWallet` directly via Stellar RPC using the Friendbot-funded ephemeral keypair, and pre-seeded the default restricted signer form with the native XLM contract.
+- **Security & ops:** documented per-alert reachability classifications for all 9 frozen `contracts-legacy/Cargo.lock` Dependabot advisories in `SECURITY.md`, completed full testnet browser E2E audit across all 13 layers, and redeployed testnet `passkey-kit-relayer-proxy` and `passkey-kit-demo`.
+
 ## 0.20.0 — 2026-10-27
 
 Breaking: two signing-option escape hatches are removed, and `signAdmin` now

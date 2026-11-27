@@ -18,6 +18,8 @@ interface Env {
   ALLOWED_ORIGINS?: string;
   /** CSV explicit wallet contract IDs (optional shortcut around RPC lookup). */
   ALLOWED_WALLET_CONTRACT_IDS?: string;
+  /** CSV optional custom SEP-41 token contract IDs allowed for direct transfers (SACs are verified on-chain). */
+  ALLOWED_TOKEN_CONTRACT_IDS?: string;
   /** CSV passkey-kit wallet WASM hashes allowed for invokes and deploys. */
   ALLOWED_WALLET_WASM_HASHES?: string;
   /** CSV smart-wallet method names allowed for direct invocation. */

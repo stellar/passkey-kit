@@ -66,7 +66,7 @@ export const DEFAULT_RATE_LIMIT_PER_IP = 10;
 export const DEFAULT_RATE_LIMIT_GLOBAL = 100;
 
 /** Maximum resource fee, in stroops, when MAX_RESOURCE_FEE_STROOPS is unset. */
-export const DEFAULT_MAX_RESOURCE_FEE_STROOPS = 1_000_000n;
+export const DEFAULT_MAX_RESOURCE_FEE_STROOPS = 10_000_000n;
 
 /** Maximum JSON request size accepted by the Worker. */
 export const MAX_REQUEST_BODY_BYTES = 256 * 1024;

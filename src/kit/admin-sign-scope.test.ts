@@ -367,6 +367,62 @@ describe("wallet-admin signing scope", () => {
     expect(isSigned(auth[0]!)).toBe(true);
     expect(expirationOf(auth[0]!)).toBe(EXPIRATION);
   });
+
+  it("preserves signature expiration ledger across sequential admin co-signers even when the ledger advances", async () => {
+    let nextExpiration = EXPIRATION;
+    const tx = await adminTx((top) => [entryForWallet(WALLET, invFromArgs(top))]);
+    const mgr = new SignerManager({
+      networkPassphrase: NET,
+      timeoutInSeconds: 30,
+      rpc: new Server(RPC_URL),
+      getWallet: () => client,
+      getContractId: () => WALLET,
+      getSignerContext: () => ({ webAuthn: { startAuthentication: vi.fn() } as never }),
+      calculateExpiration: async () => nextExpiration,
+    });
+
+    const signerA = new Ed25519Signer(Keypair.fromRawEd25519Seed(Buffer.alloc(32, 11)));
+    const signerB = new Ed25519Signer(Keypair.fromRawEd25519Seed(Buffer.alloc(32, 12)));
+
+    await mgr.signAdmin(tx, signerA);
+    expect(expirationOf(authOf(tx)[0]!)).toBe(EXPIRATION);
+
+    // Advance the chain ledger before the second co-signer signs.
+    nextExpiration = EXPIRATION + 10;
+    await mgr.signAdmin(tx, signerB);
+    expect(expirationOf(authOf(tx)[0]!)).toBe(EXPIRATION);
+
+    // Explicitly passing a conflicting expiration on an already-signed entry is refused.
+    await expect(
+      mgr.signAdmin(tx, signerB, { expiration: EXPIRATION + 20 })
+    ).rejects.toThrow(/signature expiration ledger/i);
+  });
+
+  it("refuses building an upgrade to a known-vulnerable wallet WASM hash", () => {
+    expect(() =>
+      manager().upgrade(
+        Buffer.from(
+          "0c0a264d4cc0b3e79b8533e2a2e1f0ed21501a5a3f9f2455d2f18c232940b865",
+          "hex"
+        )
+      )
+    ).toThrow(/known-vulnerable/i);
+  });
+
+  it("refuses legacy update_contract_code through v1 signAdmin", async () => {
+    const legacyOp = new xdr.InvokeContractArgs({
+      contractAddress: Address.fromString(WALLET).toScAddress(),
+      functionName: "update_contract_code",
+      args: [xdr.ScVal.scvBytes(Buffer.alloc(32, 0xaa))],
+    });
+    const tx = await adminTx(() => [entryForWallet(WALLET, invFromArgs(legacyOp))]);
+    const builtOp = (tx.built!.operations[0] as unknown as { func: xdr.HostFunction });
+    builtOp.func = xdr.HostFunction.hostFunctionTypeInvokeContract(legacyOp);
+
+    await expect(manager().signAdmin(tx, recordingSigner())).rejects.toThrow(
+      /non-admin authorization/i
+    );
+  });
 });
 
 describe("legacy upgrade signing scope", () => {

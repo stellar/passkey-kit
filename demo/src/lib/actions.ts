@@ -6,10 +6,18 @@
  */
 
 import { Buffer } from "buffer";
-import { Keypair } from "@stellar/stellar-sdk";
+import {
+  Address,
+  Contract,
+  Keypair,
+  TransactionBuilder,
+  nativeToScVal,
+} from "@stellar/stellar-sdk";
 import base64url from "base64url";
 import {
   Ed25519Signer,
+  PasskeyKitError,
+  PasskeyKitErrorCode,
   PasskeySigner,
   PolicySigner,
   SignerKey,
@@ -21,8 +29,8 @@ import {
   account,
   config,
   fundKeypair,
-  fundSigner,
   indexer,
+  rpc,
   sac,
   storage,
 } from "./config";
@@ -471,20 +479,67 @@ export async function fundWallet(amountXlm: number): Promise<void> {
  */
 async function fundWalletInner(amountXlm: number): Promise<void> {
   const fundKp = await fundKeypair;
-  const signer = await fundSigner();
-  const native = sac.getSACClient(config.nativeContractId);
-  const at = await native.transfer({
-    to: app.contractId!,
-    from: fundKp.publicKey(),
-    // `<input type=number>` allows fractional XLM; BigInt() throws on a
-    // non-integer, so scale then round to whole stroops.
-    amount: BigInt(Math.round(amountXlm * 10_000_000)),
-  });
-  await at.signAuthEntries({
-    address: fundKp.publicKey(),
-    signAuthEntry: signer.signAuthEntry,
-  });
-  if (!reportResult(`Fund wallet`, await submit(at))) return;
+  const fundPublicKey = fundKp.publicKey();
+  // Ensure the ephemeral hourly funding account exists on testnet before building.
+  let sourceAccount;
+  try {
+    sourceAccount = await rpc.getAccount(fundPublicKey);
+  } catch {
+    await rpc.requestAirdrop(fundPublicKey);
+    sourceAccount = await rpc.getAccount(fundPublicKey);
+  }
+  const amountStroops = BigInt(Math.round(amountXlm * 10_000_000));
+  const token = new Contract(config.nativeContractId);
+  const rawTx = new TransactionBuilder(sourceAccount, {
+    fee: "100000",
+    networkPassphrase: config.networkPassphrase,
+  })
+    .addOperation(
+      token.call(
+        "transfer",
+        Address.fromString(fundPublicKey).toScVal(),
+        Address.fromString(app.contractId!).toScVal(),
+        nativeToScVal(amountStroops, { type: "i128" }),
+      ),
+    )
+    .setTimeout(30)
+    .build();
+  const prepared = await rpc.prepareTransaction(rawTx);
+  prepared.sign(fundKp);
+
+  // Submit directly through RPC: the temporary Friendbot account pays its own
+  // fee, while the relayer proxy sponsors only calls authorized by allowlisted wallets.
+  const sent = await rpc.sendTransaction(prepared);
+  if (sent.status === "ERROR") {
+    reportResult("Fund wallet", {
+      success: false,
+      hash: sent.hash,
+      error: new PasskeyKitError(
+        `RPC rejected funding transaction: ${sent.errorResult?.toXDR("base64") ?? "unknown"}`,
+        PasskeyKitErrorCode.SUBMISSION_FAILED,
+      ),
+    });
+    return;
+  }
+  const final = await rpc.pollTransaction(sent.hash, { attempts: 20 });
+  const ok = final.status === "SUCCESS";
+  if (
+    !reportResult(
+      "Fund wallet",
+      ok
+        ? { success: true, hash: sent.hash, ledger: final.ledger }
+        : {
+            success: false,
+            hash: sent.hash,
+            error: new PasskeyKitError(
+              `Funding transaction ended with status ${final.status}`,
+              PasskeyKitErrorCode.SUBMISSION_FAILED,
+            ),
+          },
+    )
+  ) {
+    return;
+  }
   await refreshBalance();
 }
 

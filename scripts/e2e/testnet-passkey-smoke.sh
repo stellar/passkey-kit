@@ -18,7 +18,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEMO_DIR="$ROOT_DIR/demo"
 
-DEV_HOST="${DEV_HOST:-127.0.0.1}"
+DEV_HOST="${DEV_HOST:-localhost}"
 DEMO_PORT="${DEMO_PORT:-5173}"
 DEMO_URL="${DEMO_URL:-http://${DEV_HOST}:${DEMO_PORT}}"
 SESSION_NAME="${SESSION_NAME:-passkey-kit-smoke-$(date +%s)}"
@@ -55,7 +55,11 @@ start_demo_if_needed() {
   echo "Starting demo on ${DEV_HOST}:${DEMO_PORT}"
   (
     cd "$DEMO_DIR"
-    pnpm --ignore-workspace exec vite --host "$DEV_HOST" --port "$DEMO_PORT" --strictPort
+    if [[ -x ./node_modules/.bin/vite ]]; then
+      ./node_modules/.bin/vite --host "$DEV_HOST" --port "$DEMO_PORT" --strictPort
+    else
+      pnpm --ignore-workspace exec vite --host "$DEV_HOST" --port "$DEMO_PORT" --strictPort
+    fi
   ) >"$log_path" 2>&1 &
   DEMO_SERVER_PID=$!
   wait_for_url "$DEMO_URL" || {

@@ -611,8 +611,8 @@ export class PasskeyKit {
           );
           continue;
         }
-        const expiration = signerVal.values[1][0];
-        if (expiration !== undefined) {
+        const expiration = signerVal.values[1]?.[0];
+        if (expiration != null) {
           signerExpirationLedger ??= await this.rpc.getLatestLedger();
           if (!/^(?:0|[1-9]\d*)$/.test(signerExpirationLedger.closeTime)) {
             lastMismatch = new WalletOwnershipError(

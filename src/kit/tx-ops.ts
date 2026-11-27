@@ -82,16 +82,26 @@ export interface InternalSignOptions extends SignOptions {
 }
 
 /**
- * Function names that administer the wallet itself. A nested call into the
- * connected wallet carrying one of these names changes who can authorize on
- * behalf of the wallet, so it must never ride inside a generic dApp signature.
+ * V1 wallet-admin functions that `signAdmin()` is permitted to sign.
+ * Legacy names (`update_contract_code`, `migrate_signers`) are intentionally
+ * excluded here — legacy upgrades must go through `signLegacyUpgradeTx`, which
+ * pins the target WASM hash to the canonical upgrade target.
  */
-const WALLET_ADMIN_FUNCTIONS = new Set([
+const V1_WALLET_ADMIN_FUNCTIONS = new Set([
   "add_signer",
   "add_secp256r1",
   "update_signer",
   "remove_signer",
   "upgrade",
+]);
+
+/**
+ * Function names that administer the wallet itself. A nested call into the
+ * connected wallet carrying one of these names changes who can authorize on
+ * behalf of the wallet, so it must never ride inside a generic dApp signature.
+ */
+const WALLET_ADMIN_FUNCTIONS = new Set([
+  ...V1_WALLET_ADMIN_FUNCTIONS,
   // Legacy (pre-1.0) wallet-admin names: a legacy wallet administers itself and
   // swaps its own code through these. They must be refused on the generic and
   // standalone signing paths exactly like the current names; the dedicated
@@ -339,7 +349,7 @@ export function assertAdminEntryMatchesHostFunction(
   const args = rootFn.contractFn();
   const target = Address.fromScAddress(args.contractAddress()).toString();
   const name = args.functionName().toString();
-  if (target !== contractId || !WALLET_ADMIN_FUNCTIONS.has(name)) {
+  if (target !== contractId || !V1_WALLET_ADMIN_FUNCTIONS.has(name)) {
     throw new SigningError(
       `Refusing to sign a non-admin authorization through the wallet-admin path: ${describeWalletInvocation(root)}. Only the connected wallet's own admin call may be signed here; use the generic sign() path for dApp calls.`,
       PasskeyKitErrorCode.SIGNING_FAILED,
@@ -440,10 +450,11 @@ export async function sign<T>(
     // builders produce one; a simulation that returns extra wallet entries
     // (e.g. a duplicate admin root under a second nonce, replayable later) or
     // none is refused before anything is signed.
-    const walletEntries = countWalletEntries(
-      (topOp as Operation.InvokeHostFunction).auth ?? [],
-      contractId
+    const authEntries = (topOp as Operation.InvokeHostFunction).auth ?? [];
+    const walletAuthEntries = authEntries.filter(
+      (e) => credentialAddress(e) === contractId
     );
+    const walletEntries = walletAuthEntries.length;
     if (walletEntries !== 1) {
       throw new SigningError(
         `Refusing to sign a wallet-admin transaction that authorizes ${walletEntries} wallet entries; exactly one (the admin call itself) is allowed.`,
@@ -451,11 +462,29 @@ export async function sign<T>(
         { contractId }
       );
     }
-    // Resolve the signature lifetime from the caller/kit, never from the
-    // simulation-supplied entry: a hostile RPC must not choose how long the
-    // admin signature stays replayable. (The generic dApp path keeps the
-    // entry's own ledger; its signatures are scoped to the dApp's call.)
-    adminExpiration = options?.expiration ?? (await deps.calculateExpiration());
+    // Resolve the signature lifetime from the caller/kit, never from an
+    // unsigned simulation-supplied entry: a hostile RPC must not choose how
+    // long the admin signature stays replayable. When the entry already carries
+    // a co-signer's signature, preserve its expiration ledger (and refuse a
+    // conflicting explicit expiration) so sequential `signAdmin()` calls never
+    // invalidate an earlier co-signer's signature.
+    const existingCreds = getAddressCredentials(walletAuthEntries[0]!.credentials());
+    const hasExistingSignatures =
+      existingCreds.signature().switch().name === "scvVec" &&
+      (existingCreds.signature().vec()?.[0]?.map()?.length ?? 0) > 0;
+    const existingExpiration = existingCreds.signatureExpirationLedger();
+    if (hasExistingSignatures && existingExpiration > 0) {
+      if (options?.expiration != null && options.expiration !== existingExpiration) {
+        throw new SigningError(
+          `Refusing to change signature expiration ledger from ${existingExpiration} to ${options.expiration} on an already-signed wallet-admin entry; changing it would invalidate existing co-signatures.`,
+          PasskeyKitErrorCode.SIGNING_FAILED,
+          { contractId, existingExpiration, requestedExpiration: options.expiration }
+        );
+      }
+      adminExpiration = existingExpiration;
+    } else {
+      adminExpiration = options?.expiration ?? (await deps.calculateExpiration());
+    }
   }
 
   await txn.signAuthEntries({

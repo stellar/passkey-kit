@@ -21,6 +21,7 @@ import {
   Keypair,
   Networks,
   Operation,
+  StrKey,
   Transaction,
   TransactionBuilder,
   xdr,
@@ -390,6 +391,7 @@ function parseSubmissionBody(text: string): SubmissionBody {
 }
 
 async function walletContractIsAllowed(env: Env, contractId: string): Promise<boolean> {
+  if (!StrKey.isValidContract(contractId)) return false;
   if (csvSet(env.ALLOWED_WALLET_CONTRACT_IDS).has(contractId)) return true;
 
   const hashes = configuredWasmHashes(env);
@@ -409,6 +411,77 @@ async function walletContractIsAllowed(env: Env, contractId: string): Promise<bo
   } catch (error) {
     console.error("Wallet allowlist RPC verification failed:", error);
     throw new RequestError("Could not verify wallet contract", 503);
+  }
+}
+
+async function tokenContractIsAllowed(env: Env, contractId: string): Promise<boolean> {
+  if (!StrKey.isValidContract(contractId)) return false;
+  if (csvSet(env.ALLOWED_TOKEN_CONTRACT_IDS).has(contractId)) return true;
+  if (!env.STELLAR_RPC_URL) {
+    throw new RequestError("STELLAR_RPC_URL is required for token verification", 500);
+  }
+
+  try {
+    const server = new RpcServer(env.STELLAR_RPC_URL);
+    const response = await server.getLedgerEntries(new Contract(contractId).getFootprint());
+    const entry = response.entries[0];
+    if (!entry) return false;
+    const executable = entry.val.contractData().val().instance().executable();
+    return executable.switch().name === "contractExecutableStellarAsset";
+  } catch (error) {
+    console.error("Token allowlist RPC verification failed:", error);
+    throw new RequestError("Could not verify token contract", 503);
+  }
+}
+
+async function validateDirectTokenTransfer(
+  env: Env,
+  invoke: xdr.InvokeContractArgs,
+  auth: xdr.SorobanAuthorizationEntry[]
+): Promise<void> {
+  if (auth.length !== 1) {
+    throw new RequestError("Transfer must contain exactly one auth entry", 403);
+  }
+  const args = invoke.args();
+  if (args.length !== 3 || args[0].switch().name !== "scvAddress") {
+    throw new RequestError("Token transfer has an invalid argument shape", 403);
+  }
+  let from: string;
+  try {
+    from = Address.fromScAddress(args[0].address()).toString();
+  } catch {
+    throw new RequestError("Token transfer source must be a contract", 403);
+  }
+  if (!StrKey.isValidContract(from)) {
+    throw new RequestError("Token transfer source must be a contract", 403);
+  }
+
+  const entry = auth[0];
+  const credentials = entry.credentials();
+  if (credentials.switch().name !== "sorobanCredentialsAddressV2") {
+    throw new RequestError("Only address-bound V2 wallet credentials are allowed", 403);
+  }
+  const signer = Address.fromScAddress(credentials.addressV2().address()).toString();
+  const root = entry.rootInvocation();
+  const rootFn = root.function();
+  if (
+    signer !== from ||
+    !(await walletContractIsAllowed(env, signer)) ||
+    root.subInvocations().length !== 0 ||
+    rootFn.switch().name !== "sorobanAuthorizedFunctionTypeContractFn" ||
+    !Buffer.from(rootFn.contractFn().toXDR()).equals(Buffer.from(invoke.toXDR()))
+  ) {
+    throw new RequestError("Transfer auth does not exactly match func and wallet", 403);
+  }
+
+  let token: string;
+  try {
+    token = Address.fromScAddress(invoke.contractAddress()).toString();
+  } catch {
+    throw new RequestError("Token transfer target must be a contract", 403);
+  }
+  if (!(await tokenContractIsAllowed(env, token))) {
+    throw new RequestError("Token contract is not allowed", 403);
   }
 }
 
@@ -497,31 +570,35 @@ async function validateFuncSubmission(env: Env, body: Extract<SubmissionBody, { 
       throw new RequestError("Only invokeContract host functions are allowed", 403);
     }
     const invoke = func.invokeContract();
-    const contractId = Address.fromScAddress(invoke.contractAddress()).toString();
-    if (!(await walletContractIsAllowed(env, contractId))) {
-      throw new RequestError("Wallet contract is not allowlisted", 403);
-    }
-
-    const defaultFunctions = DEFAULT_WALLET_FUNCTIONS.join(",");
-    const functions = csvSet(env.ALLOWED_WALLET_FUNCTIONS ?? defaultFunctions);
     const functionName = invoke.functionName().toString();
-    if (!functions.has(functionName)) {
-      throw new RequestError("Wallet function is not allowlisted", 403);
-    }
+    if (functionName === "transfer") {
+      await validateDirectTokenTransfer(env, invoke, auth);
+    } else {
+      const contractId = Address.fromScAddress(invoke.contractAddress()).toString();
+      if (!(await walletContractIsAllowed(env, contractId))) {
+        throw new RequestError("Wallet contract is not allowlisted", 403);
+      }
 
-    for (const entry of auth) {
-      const credentials = entry.credentials();
-      if (credentials.switch().name !== "sorobanCredentialsAddressV2") {
-        throw new RequestError("Only address-bound V2 wallet credentials are allowed", 403);
+      const defaultFunctions = DEFAULT_WALLET_FUNCTIONS.join(",");
+      const functions = csvSet(env.ALLOWED_WALLET_FUNCTIONS ?? defaultFunctions);
+      if (!functions.has(functionName)) {
+        throw new RequestError("Wallet function is not allowlisted", 403);
       }
-      const signer = Address.fromScAddress(credentials.addressV2().address()).toString();
-      if (signer !== contractId) {
-        throw new RequestError("Auth credential is not for the invoked wallet", 403);
-      }
-      validateAuthorizedInvocation(entry.rootInvocation(), contractId);
-      const root = entry.rootInvocation().function().contractFn();
-      if (!Buffer.from(root.toXDR()).equals(Buffer.from(invoke.toXDR()))) {
-        throw new RequestError("Auth root invocation does not match func", 403);
+
+      for (const entry of auth) {
+        const credentials = entry.credentials();
+        if (credentials.switch().name !== "sorobanCredentialsAddressV2") {
+          throw new RequestError("Only address-bound V2 wallet credentials are allowed", 403);
+        }
+        const signer = Address.fromScAddress(credentials.addressV2().address()).toString();
+        if (signer !== contractId) {
+          throw new RequestError("Auth credential is not for the invoked wallet", 403);
+        }
+        validateAuthorizedInvocation(entry.rootInvocation(), contractId);
+        const root = entry.rootInvocation().function().contractFn();
+        if (!Buffer.from(root.toXDR()).equals(Buffer.from(invoke.toXDR()))) {
+          throw new RequestError("Auth root invocation does not match func", 403);
+        }
       }
     }
   }
@@ -630,8 +707,22 @@ async function validateSubmission(env: Env, body: SubmissionBody): Promise<void>
   else await validateFuncSubmission(env, body);
 }
 
-function createClient(env: Env, apiKey: string): ChannelsClient {
-  return new ChannelsClient({ baseUrl: env.RELAYER_BASE_URL, apiKey });
+const WORKERS_FETCH_OPTIONS: RequestInit = { cache: "no-store" };
+
+type AxiosBackedClient = {
+  axiosClient?: { defaults?: { fetchOptions?: RequestInit } };
+};
+
+export function createClient(env: Env, apiKey: string): ChannelsClient {
+  const client = new ChannelsClient({ baseUrl: env.RELAYER_BASE_URL, apiKey });
+  const { axiosClient } = client as unknown as AxiosBackedClient;
+  if (axiosClient?.defaults) {
+    axiosClient.defaults.fetchOptions = {
+      ...axiosClient.defaults.fetchOptions,
+      ...WORKERS_FETCH_OPTIONS,
+    };
+  }
+  return client;
 }
 
 export function extractMissingAccount(errorMessage: string): string | null {

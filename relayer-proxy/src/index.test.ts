@@ -119,6 +119,7 @@ function makeEnv(
     STELLAR_RPC_URL: "https://rpc.example",
     ALLOWED_ORIGINS: opts.origins ?? "https://demo.example",
     ALLOWED_WALLET_CONTRACT_IDS: opts.allowedContracts ?? WALLET,
+    ALLOWED_TOKEN_CONTRACT_IDS: (opts as { allowedTokens?: string }).allowedTokens ?? "",
     ALLOWED_WALLET_WASM_HASHES:
       opts.allowedWasmHashes === undefined
         ? WALLET_WASM_HASH
@@ -744,7 +745,7 @@ describe("POST / func-path validation", () => {
 
   it("rejects a non-allowlisted wallet function", async () => {
     const { res, apiKeyDO } = await submit(
-      walletSubmission(WALLET, { functionName: "transfer" })
+      walletSubmission(WALLET, { functionName: "set_admin" })
     );
     await expectRejected(
       res,
@@ -1038,6 +1039,167 @@ describe("POST / submission and errors", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     }
   );
+});
+
+describe("POST / direct token transfer sponsorship", () => {
+  const TOKEN = Address.contract(Buffer.alloc(32, 9)).toString();
+  const RECIPIENT = Address.contract(Buffer.alloc(32, 10)).toString();
+
+  function transferSubmission(opts: {
+    token?: string;
+    from?: string;
+    v1Credentials?: boolean;
+    extraAuth?: boolean;
+    subInvocation?: boolean;
+    mismatchRoot?: boolean;
+  } = {}) {
+    const token = opts.token ?? TOKEN;
+    const from = opts.from ?? WALLET;
+    const invoke = new xdr.InvokeContractArgs({
+      contractAddress: Address.fromString(token).toScAddress(),
+      functionName: "transfer",
+      args: [
+        xdr.ScVal.scvAddress(Address.fromString(from).toScAddress()),
+        xdr.ScVal.scvAddress(Address.fromString(RECIPIENT).toScAddress()),
+        xdr.ScVal.scvI128(new xdr.Int128Parts({ hi: xdr.Int64.fromString("0"), lo: xdr.Uint64.fromString("10000000") })),
+      ],
+    });
+    const func = xdr.HostFunction.hostFunctionTypeInvokeContract(invoke);
+    const addrCreds = new xdr.SorobanAddressCredentials({
+      address: Address.fromString(from).toScAddress(),
+      nonce: xdr.Int64.fromString("1"),
+      signatureExpirationLedger: 100,
+      signature: xdr.ScVal.scvVoid(),
+    });
+    const credentials = opts.v1Credentials
+      ? xdr.SorobanCredentials.sorobanCredentialsAddress(addrCreds)
+      : xdr.SorobanCredentials.sorobanCredentialsAddressV2(addrCreds);
+    const rootArgs = opts.mismatchRoot ? contractFn(token, "approve") : invoke;
+    const entry = new xdr.SorobanAuthorizationEntry({
+      credentials,
+      rootInvocation: new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(rootArgs),
+        subInvocations: opts.subInvocation
+          ? [
+              new xdr.SorobanAuthorizedInvocation({
+                function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+                  contractFn(WALLET, "add_signer")
+                ),
+                subInvocations: [],
+              }),
+            ]
+          : [],
+      }),
+    });
+    const auth = opts.extraAuth ? [entry.toXDR("base64"), entry.toXDR("base64")] : [entry.toXDR("base64")];
+    return { func: func.toXDR("base64"), auth };
+  }
+
+  function mockSacLedgerEntry() {
+    const instance = xdr.LedgerEntryData.contractData(
+      new xdr.ContractDataEntry({
+        ext: new xdr.ExtensionPoint(0),
+        contract: Address.fromString(TOKEN).toScAddress(),
+        key: xdr.ScVal.scvLedgerKeyContractInstance(),
+        durability: xdr.ContractDataDurability.persistent(),
+        val: xdr.ScVal.scvContractInstance(
+          new xdr.ScContractInstance({
+            executable: xdr.ContractExecutable.contractExecutableStellarAsset(),
+            storage: [],
+          })
+        ),
+      })
+    );
+    return { entries: [{ val: instance }] };
+  }
+
+  it("sponsors direct transfer to a verified Stellar Asset Contract from an allowlisted wallet", async () => {
+    vi.spyOn(RpcServer.prototype, "getLedgerEntries").mockResolvedValueOnce(mockSacLedgerEntry() as any);
+    submitSorobanTransaction.mockResolvedValueOnce({
+      transactionId: "tx-sac",
+      hash: "hash-sac",
+      status: "confirmed",
+    });
+
+    const res = await worker.fetch(
+      makeRequest("/", { method: "POST", body: transferSubmission() }),
+      makeEnv(),
+      ctx()
+    );
+    expect(res.status).toBe(200);
+    expect(submitSorobanTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("sponsors direct transfer to an explicitly allowlisted custom token contract", async () => {
+    submitSorobanTransaction.mockResolvedValueOnce({
+      transactionId: "tx-custom",
+      hash: "hash-custom",
+      status: "confirmed",
+    });
+
+    const env = makeEnv();
+    env.ALLOWED_TOKEN_CONTRACT_IDS = TOKEN;
+    const res = await worker.fetch(
+      makeRequest("/", { method: "POST", body: transferSubmission() }),
+      env,
+      ctx()
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects transfer to an unlisted non-SAC contract", async () => {
+    const wasmEntry = xdr.LedgerEntryData.contractData(
+      new xdr.ContractDataEntry({
+        ext: new xdr.ExtensionPoint(0),
+        contract: Address.fromString(TOKEN).toScAddress(),
+        key: xdr.ScVal.scvLedgerKeyContractInstance(),
+        durability: xdr.ContractDataDurability.persistent(),
+        val: xdr.ScVal.scvContractInstance(
+          new xdr.ScContractInstance({
+            executable: xdr.ContractExecutable.contractExecutableWasm(Buffer.alloc(32, 0x11)),
+            storage: [],
+          })
+        ),
+      })
+    );
+    vi.spyOn(RpcServer.prototype, "getLedgerEntries").mockResolvedValueOnce({ entries: [{ val: wasmEntry }] } as any);
+
+    const res = await worker.fetch(
+      makeRequest("/", { method: "POST", body: transferSubmission() }),
+      makeEnv(),
+      ctx()
+    );
+    expect(res.status).toBe(403);
+    expect(submitSorobanTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects transfer from a G-address with 403 instead of 503", async () => {
+    const res = await worker.fetch(
+      makeRequest("/", { method: "POST", body: transferSubmission({ from: DEPLOYER }) }),
+      makeEnv(),
+      ctx()
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects transfer with V1 credentials, extra auth entries, sub-invocations, or mismatched root", async () => {
+    for (const bad of [
+      { v1Credentials: true },
+      { extraAuth: true },
+      { subInvocation: true },
+      { mismatchRoot: true },
+    ]) {
+      const env = makeEnv();
+      env.ALLOWED_TOKEN_CONTRACT_IDS = TOKEN;
+      const res = await worker.fetch(
+        makeRequest("/", { method: "POST", body: transferSubmission(bad) }),
+        env,
+        ctx()
+      );
+      expect(res.status).toBe(403);
+    }
+    expect(submitSorobanTransaction).not.toHaveBeenCalled();
+  });
 });
 
 describe("RequestRateLimiter", () => {

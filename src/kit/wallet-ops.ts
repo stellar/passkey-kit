@@ -31,6 +31,7 @@ import {
 } from "passkey-kit-sdk";
 import { Address, xdr } from "@stellar/stellar-sdk";
 import base64url from "../base64url.js";
+import { KNOWN_VULNERABLE_WALLET_WASM_HASHES } from "../constants.js";
 import { PasskeyKitErrorCode, ValidationError } from "../errors.js";
 import { SignerStore, type SignerKey, type SignerLimits } from "../types.js";
 import { readContractData } from "../rpc-data.js";
@@ -278,6 +279,14 @@ export function buildUpgradeTx(
   deps: WalletWriteDeps,
   newWasmHash: Buffer | Uint8Array
 ): Promise<WalletTx> {
+  const normalized = Buffer.from(newWasmHash).toString("hex").toLowerCase();
+  if (KNOWN_VULNERABLE_WALLET_WASM_HASHES.includes(normalized)) {
+    throw new ValidationError(
+      `Refusing to build an upgrade to known-vulnerable wallet WASM hash ${normalized}.`,
+      PasskeyKitErrorCode.INVALID_INPUT,
+      { wasmHash: normalized }
+    );
+  }
   return deps.wallet.upgrade(
     { new_wasm_hash: Buffer.from(newWasmHash) },
     { timeoutInSeconds: deps.timeoutInSeconds }

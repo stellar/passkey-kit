@@ -65,7 +65,7 @@ All lists are comma-separated. Empty security allowlists fail closed.
 | `ALLOWED_WALLET_WASM_HASHES` | Wallet WASM hashes approved for invokes and deploys |
 | `ALLOWED_WALLET_FUNCTIONS` | Direct wallet methods the proxy may sponsor |
 | `ALLOWED_DEPLOYER_ADDRESSES` | Deploy transaction/preimage G-addresses |
-| `MAX_RESOURCE_FEE_STROOPS` | Maximum resource fee per request; default `1000000` |
+| `MAX_RESOURCE_FEE_STROOPS` | Maximum resource fee per request; default `10000000` |
 | `RATE_LIMIT_WINDOW_SECONDS` | Fixed-window duration; default `60` |
 | `RATE_LIMIT_PER_IP` | Per-IP requests per window; default `10` |
 | `RATE_LIMIT_GLOBAL` | All-IP requests per window; default `100` |
@@ -86,11 +86,10 @@ public allowlists. Never add a Channels key; the Worker mints keys through
 
 ```sh
 cd relayer-proxy
-pnpm install --ignore-workspace
+pnpm install --frozen-lockfile --ignore-workspace
 pnpm test
 pnpm typecheck
-pnpm deploy              # testnet
-pnpm deploy:production   # mainnet; keep fail-closed until explicitly configured
+pnpm run deploy          # testnet only (no mainnet relayer by policy)
 ```
 
 The tests cover operation/contract rejection, V2 wallet auth, deploy source and
