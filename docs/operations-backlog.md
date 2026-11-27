@@ -1,6 +1,6 @@
 # Operations backlog
 
-Last reviewed: 2026-11-27 (against `main`, `passkey-kit@0.20.0` + post-0.20.0 hardening).
+Last reviewed: 2026-11-27 (against `main`, `passkey-kit@0.20.1`).
 
 Open release, test, and deploy tasks that are not code changes. Each item says
 how to check it and when it is done. Remove an item when it is done, and put

@@ -2,7 +2,7 @@
 
 All notable changes to `passkey-kit` are recorded here. The `0.13.0` entry covers the ground-up **v1 overhaul** of the contract, SDK, bindings, and services; `0.13.1` wires live signer discovery onto Mercury's hosted indexer.
 
-## Unreleased
+## 0.20.1 — 2026-11-27
 
 - **Fixed `connectWallet` crashing on non-expiring passkey signers.** `ContractSpec.scValToNative` decodes `Option<u64>::None` on `SignerVal` as `[null]` rather than `[undefined]`; `src/kit.ts` now checks `expiration != null` instead of `expiration !== undefined`.
 - **Preserved signature expiration across sequential `signAdmin()` co-signers.** When an admin auth entry already carries a co-signer's signature, `signAdmin()` now preserves its `signatureExpirationLedger` instead of recomputing a new ledger on each call, and refuses a conflicting explicit `expiration` option.
